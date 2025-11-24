@@ -2,13 +2,14 @@ use eframe::{App, Frame, egui};
 use egui_sgr::{AnsiParser, ansi_to_rich_text};
 
 // Helper function to display ANSI escape sequences in a readable format
+// This replaces actual control characters with escaped strings for display purposes
 fn display_ansi_sequence(input: &str) -> String {
     input.replace("\x1b", "\\x1b")
 }
 
-// Helper function to convert user input with \x1b string to actual control character
-fn parse_ansi_input(input: &str) -> String {
-    input.replace("\\x1b", "\x1b")
+// Helper function to convert user input with escaped sequences to actual control characters
+fn parse_user_input(input: &str) -> String {
+    input.replace("\\x1b", "\x1b").replace("\\033", "\x1b")
 }
 
 struct AnsiColorDemo {
@@ -279,7 +280,7 @@ impl AnsiColorDemo {
     fn show_custom_input(&mut self, ui: &mut egui::Ui) {
         ui.heading("Custom Input");
 
-        ui.label("Tip: You can type \\x1b as a shortcut for the control character");
+        ui.label("Tip: Type \\x1b for escape sequences (demo will convert them for parsing)");
 
         ui.horizontal(|ui| {
             ui.label("ANSI Sequence:");
@@ -304,8 +305,8 @@ impl AnsiColorDemo {
         ui.monospace(display_ansi_sequence(&self.custom_input));
 
         ui.label("Conversion Result:");
-        // Parse the input to convert \x1b strings to actual control characters
-        let parsed_input = parse_ansi_input(&self.custom_input);
+        // Parse the user input to convert escaped sequences to actual control characters
+        let parsed_input = parse_user_input(&self.custom_input);
         let rich_text = ansi_to_rich_text(&parsed_input);
         ui.horizontal_wrapped(|ui| {
             for text in rich_text {
