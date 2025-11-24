@@ -68,8 +68,16 @@ impl AnsiParser {
         // Reset current colors
         self.reset_colors();
 
+        // Preprocess input to handle all escape sequence representations
+        let processed_input = input
+            .replace("\\x1b", "\x1b")
+            .replace("\\x1B", "\x1b")
+            .replace("\\X1b", "\x1b")
+            .replace("\\X1B", "\x1b")
+            .replace("\\033", "\x1b");
+
         // Regular expression to match ANSI escape sequences
-        let ansi_re = match Regex::new(r"\x1b\[([0-9;]+)m([^\x1b]*)") {
+        let ansi_re = match Regex::new(r"(\x1b|\033)\[([0-9;]+)m([^\x1b\033]*)") {
             Ok(re) => re,
             Err(_) => {
                 // If the regex fails to compile, return the original text
@@ -84,14 +92,14 @@ impl AnsiParser {
         let mut last_end = 0;
 
         // Iterate over all matched ANSI sequences
-        for cap in ansi_re.captures_iter(input) {
-            let sequence = cap.get(1).unwrap().as_str();
-            let text = cap.get(2).unwrap().as_str();
+        for cap in ansi_re.captures_iter(&processed_input) {
+            let sequence = cap.get(2).unwrap().as_str();
+            let text = cap.get(3).unwrap().as_str();
             let start = cap.get(0).unwrap().start();
 
             // Add the text before the escape sequence (if any)
             if start > last_end {
-                let plain_text = &input[last_end..start];
+                let plain_text = &processed_input[last_end..start];
                 if !plain_text.is_empty() {
                     result.push(ColoredText {
                         text: plain_text.to_string(),
@@ -117,13 +125,13 @@ impl AnsiParser {
         }
 
         // Add the remaining text (if any)
-        if last_end < input.len() {
-            let plain_text = &input[last_end..];
+        if last_end < processed_input.len() {
+            let plain_text = &processed_input[last_end..];
             if !plain_text.is_empty() {
                 result.push(ColoredText {
                     text: plain_text.to_string(),
-                    foreground_color: self.current_fg,
-                    background_color: self.current_bg,
+                    foreground_color: None,
+                    background_color: None,
                 });
             }
         }
@@ -294,8 +302,16 @@ pub fn convert_to_rich_text(colored_texts: &[ColoredText]) -> Vec<RichText> {
 /// # Returns
 /// A list of RichText that can be displayed in egui
 pub fn ansi_to_rich_text(input: &str) -> Vec<RichText> {
+    // Preprocess input to handle all escape sequence representations
+    let processed_input = input
+        .replace("\\x1b", "\x1b")
+        .replace("\\x1B", "\x1b")
+        .replace("\\X1b", "\x1b")
+        .replace("\\X1B", "\x1b")
+        .replace("\\033", "\x1b");
+
     let mut parser = AnsiParser::new();
-    let colored_texts = parser.parse(input);
+    let colored_texts = parser.parse(&processed_input);
     convert_to_rich_text(&colored_texts)
 }
 
@@ -423,5 +439,74 @@ mod tests {
 
         assert!(colored_segments[4].foreground_color.is_none());
         assert!(colored_segments[4].background_color.is_none());
+    }
+
+    #[test]
+    fn test_escape_sequence_variations() {
+        // Test various escape sequence representations
+        let inputs = [
+            ("\\x1b[31mRed\\x1b[0m", "x1b"),
+            ("\\x1B[31mRed\\x1B[0m", "x1B"),
+            ("\\X1b[31mRed\\X1b[0m", "X1b"),
+            ("\\X1B[31mRed\\X1B[0m", "X1B"),
+            ("\\033[31mRed\\033[0m", "033"),
+        ];
+
+        for (input, variant) in inputs {
+            let mut parser = AnsiParser::new();
+            let colored_segments = parser.parse(input);
+
+            // All should produce the same result
+            assert_eq!(colored_segments.len(), 1, "Failed for {}", variant);
+            assert_eq!(colored_segments[0].text, "Red", "Failed for {}", variant);
+            assert!(
+                colored_segments[0].foreground_color.is_some(),
+                "Failed for {}",
+                variant
+            );
+            assert!(
+                colored_segments[0].background_color.is_none(),
+                "Failed for {}",
+                variant
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixed_escape_sequence_variations() {
+        // Test mixing different escape sequence representations in the same string
+        let input = "\\x1b[31mRed\\033[32mGreen\\X1B[33mYellow\\x1B[0m";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        // Should have 3 segments: Red, Green, Yellow
+        assert_eq!(colored_segments.len(), 3);
+        assert_eq!(colored_segments[0].text, "Red");
+        assert_eq!(colored_segments[1].text, "Green");
+        assert_eq!(colored_segments[2].text, "Yellow");
+
+        // All should have foreground colors
+        assert!(colored_segments[0].foreground_color.is_some());
+        assert!(colored_segments[1].foreground_color.is_some());
+        assert!(colored_segments[2].foreground_color.is_some());
+    }
+
+    #[test]
+    fn test_ansi_to_rich_text_with_escape_variations() {
+        // Test the convenience function with different escape representations
+        let inputs = [
+            "\\x1b[31mRed\\x1b[0m",
+            "\\x1B[31mRed\\x1B[0m",
+            "\\X1b[31mRed\\X1b[0m",
+            "\\X1B[31mRed\\X1B[0m",
+            "\\033[31mRed\\033[0m",
+        ];
+
+        for input in inputs {
+            let rich_text = ansi_to_rich_text(input);
+            assert_eq!(rich_text.len(), 1);
+            assert_eq!(rich_text[0].text(), "Red");
+            assert_ne!(rich_text[0].color(), Some(egui::Color32::GRAY)); // Color should not be default
+        }
     }
 }
