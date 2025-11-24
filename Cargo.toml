@@ -1,0 +1,15 @@
+[package]
+name = "egui_sgr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+egui = "0.33.2"
+regex = "1.12.2"
+
+[dev-dependencies]
+eframe = "0.33.2"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"

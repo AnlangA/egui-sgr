@@ -1,0 +1,164 @@
+stages:
+    - fmt
+    - compile
+    - unit test
+    - build examples
+    - release
+
+# ----------------------------------------------------------------------
+# 1. 缓存配置 (Cache Configuration)
+# ----------------------------------------------------------------------
+cache:
+    policy: pull-push
+
+# ----------------------------------------------------------------------
+# 2. rustfmt 检查
+# ----------------------------------------------------------------------
+rust-fmt-check:
+    stage: fmt
+    image: rust-compiler:1.0
+    script:
+        - rustup component add rustfmt
+        - cargo fmt -- --check
+
+# ----------------------------------------------------------------------
+# 3. 普通编译检查
+# ----------------------------------------------------------------------
+rust-compile-check:
+    stage: compile
+    image: rust-compiler:1.0
+    script:
+        - cargo check --all-targets --all-features
+
+# ----------------------------------------------------------------------
+# 4. 单元测试
+# ----------------------------------------------------------------------
+rust-unit-test:
+    stage: unit test
+    image: rust-compiler:1.0
+    script:
+        - cargo test --all-targets --verbose
+
+# ----------------------------------------------------------------------
+# 5. 构建示例程序
+# ----------------------------------------------------------------------
+build-example:
+    stage: build examples
+    image: rust-compiler:1.0
+    script:
+        # 安装eframe依赖
+        - cargo add eframe --dev
+        # 构建示例程序
+        - cargo build --example demo --release
+        # 为示例程序创建可执行文件名
+        - cp target/release/examples/demo target/release/egui_sgr_demo
+    artifacts:
+        paths:
+            - target/release/egui_sgr_demo
+        expire_in: 1 week
+        name: "egui_sgr_demo_${CI_COMMIT_SHORT_SHA}"
+
+# ----------------------------------------------------------------------
+# 6. 构建发布版本（Linux MUSL）
+# ----------------------------------------------------------------------
+build-linux-musl:
+    stage: release
+    image: rust-compiler:1.0
+    rules:
+        - if: $CI_COMMIT_TAG # 只有在推送标签时执行
+    before_script:
+        - rustup target add x86_64-unknown-linux-musl
+        - apt-get update && apt-get install -y musl-tools
+    script:
+        # 安装eframe依赖
+        - cargo add eframe --dev
+        # 构建示例程序（静态链接）
+        - cargo build --example demo --release --target x86_64-unknown-linux-musl
+        # 为示例程序创建可执行文件名
+        - cp target/x86_64-unknown-linux-musl/release/examples/demo target/release/egui_sgr_demo_linux
+    artifacts:
+        paths:
+            - target/release/egui_sgr_demo_linux
+        expire_in: 1 week
+        name: "egui_sgr_demo_linux_${CI_COMMIT_TAG}"
+
+# ----------------------------------------------------------------------
+# 7. 构建发布版本（Windows）
+# ----------------------------------------------------------------------
+build-windows:
+    stage: release
+    image: rust-compiler:1.0
+    rules:
+        - if: $CI_COMMIT_TAG # 只有在推送标签时执行
+    before_script:
+        - rustup target add x86_64-pc-windows-gnu
+        - apt-get update && apt-get install -y mingw-w64
+    script:
+        # 安装eframe依赖
+        - cargo add eframe --dev
+        # 构建示例程序（Windows）
+        - cargo build --example demo --release --target x86_64-pc-windows-gnu
+        # 为示例程序创建可执行文件名
+        - cp target/x86_64-pc-windows-gnu/release/examples/demo.exe target/release/egui_sgr_demo_windows.exe
+    artifacts:
+        paths:
+            - target/release/egui_sgr_demo_windows.exe
+        expire_in: 1 week
+        name: "egui_sgr_demo_windows_${CI_COMMIT_TAG}"
+
+# ----------------------------------------------------------------------
+# 8. 创建 GitLab Release 页面
+# ----------------------------------------------------------------------
+create-gitlab-release:
+    stage: release
+    image: registry.gitlab.com/gitlab-org/release-cli:latest
+    needs:
+        - build-linux-musl
+        - build-windows
+    rules:
+        - if: $CI_COMMIT_TAG
+    script:
+        - echo "Creating GitLab Release for $CI_COMMIT_TAG"
+    release:
+        name: "Release $CI_COMMIT_TAG"
+        tag_name: "$CI_COMMIT_TAG"
+        description: |
+            ## 🎉 正式发布 egui_sgr $CI_COMMIT_TAG
+
+            本次 Release 包含：
+
+            - **egui_sgr** 库：一个将ANSI转义序列颜色模型转换为egui文本颜色的Rust库
+            - **演示程序**：展示库的功能和用法
+
+            ### 功能特性
+            - 支持4位色（16色）模型
+            - 支持8位色（256色）模型
+            - 支持24位真彩色模型
+            - 自动检测和转换混合颜色序列
+            - 支持前景色和背景色同时设置
+            - 智能缓存和应用当前颜色状态
+
+            ### 使用示例
+            ```rust
+            use egui_sgr::ansi_to_rich_text;
+
+            // 4位色（16色）
+            let red_text = ansi_to_rich_text("\x1b[31m红色文本\x1b[0m");
+
+            // 8位色（256色）
+            let orange_text = ansi_to_rich_text("\x1b[38;5;208m橙色文本\x1b[0m");
+
+            // 24位真彩色
+            let pink_text = ansi_to_rich_text("\x1b[38;2;255;105;180m粉色文本\x1b[0m");
+            ```
+        assets:
+            links:
+                - name: "Linux 演示程序 (x86_64-unknown-linux-musl)"
+                  url: "$CI_SERVER_URL/$CI_PROJECT_PATH/-/jobs/artifacts/$CI_COMMIT_TAG/raw/target/release/egui_sgr_demo_linux?job=build-linux-musl"
+                  link_type: "other"
+                - name: "Windows 演示程序 (x86_64-pc-windows-gnu)"
+                  url: "$CI_SERVER_URL/$CI_PROJECT_PATH/-/jobs/artifacts/$CI_COMMIT_TAG/raw/target/release/egui_sgr_demo_windows.exe?job=build-windows"
+                  link_type: "other"
+                - name: "源代码"
+                  url: "$CI_PROJECT_URL"
+                  link_type: "other"
