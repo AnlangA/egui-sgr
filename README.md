@@ -145,3 +145,7 @@ For each ANSI sequence:
 *   Independent usage of the three color models.
 *   Color combination and sequence processing.
 *   Interactive color demonstration.
+
+## Demo
+
+![Demo](demo.png)
