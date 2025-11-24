@@ -9,7 +9,12 @@ fn display_ansi_sequence(input: &str) -> String {
 
 // Helper function to convert user input with escaped sequences to actual control characters
 fn parse_user_input(input: &str) -> String {
-    input.replace("\\x1b", "\x1b").replace("\\033", "\x1b")
+    input
+        .replace("\\x1b", "\x1b") // lowercase hex
+        .replace("\\x1B", "\x1b") // mixed case hex
+        .replace("\\X1b", "\x1b") // uppercase X, lowercase b
+        .replace("\\X1B", "\x1b") // all uppercase
+        .replace("\\033", "\x1b") // octal
 }
 
 struct AnsiColorDemo {
