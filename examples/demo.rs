@@ -22,6 +22,7 @@ struct AnsiColorDemo {
     input_8bit: String,
     input_24bit: String,
     input_mixed: String,
+    input_bg: String,
     custom_input: String,
 }
 
@@ -32,6 +33,7 @@ impl Default for AnsiColorDemo {
             input_8bit: "This is \x1b[38;5;208morange\x1b[0m, \x1b[38;5;51msky blue\x1b[0m and \x1b[38;5;120mgreen\x1b[0m text".to_string(),
             input_24bit: "This is \x1b[38;2;255;105;180mhot pink\x1b[0m and \x1b[38;2;128;0;128mpurple\x1b[0m text".to_string(),
             input_mixed: "Normal text \x1b[31mred\x1b[0m normal \x1b[38;5;208morange\x1b[0m normal \x1b[38;2;255;105;180mpink\x1b[0m normal".to_string(),
+            input_bg: "Text with \x1b[41mred background\x1b[0m and \x1b[44mblue background\x1b[0m, \x1b[31;43myellow bg + red fg\x1b[0m".to_string(),
             custom_input: "\\x1b[1;31mBold red\\x1b[0m \\x1b[4;32mUnderline green\\x1b[0m \\x1b[7;33mInverted yellow\\x1b[0m".to_string(),
         }
     }
@@ -60,6 +62,10 @@ impl App for AnsiColorDemo {
 
                     // Mixed color example
                     self.show_mixed_example(ui);
+                    ui.add_space(20.0);
+
+                    // Background color example
+                    self.show_background_example(ui);
                     ui.add_space(20.0);
 
                     // Custom input
@@ -278,6 +284,125 @@ impl AnsiColorDemo {
 
                 ui.label(color_desc);
                 ui.end_row();
+            }
+        });
+    }
+
+    fn show_background_example(&self, ui: &mut egui::Ui) {
+        ui.heading("Background Color Example");
+
+        ui.horizontal(|ui| {
+            ui.label("ANSI Sequence:");
+            ui.monospace(display_ansi_sequence(&self.input_bg));
+        });
+
+        ui.label("Conversion Result:");
+        let rich_text = ansi_to_rich_text(&self.input_bg);
+        ui.horizontal_wrapped(|ui| {
+            for text in rich_text {
+                ui.label(text);
+            }
+        });
+
+        ui.add_space(10.0);
+
+        // Show all 16 background colors
+        ui.label("All 16 Background Colors (4-bit):");
+        ui.horizontal_wrapped(|ui| {
+            let colors = [
+                ("BG Black", 40),
+                ("BG Red", 41),
+                ("BG Green", 42),
+                ("BG Yellow", 43),
+                ("BG Blue", 44),
+                ("BG Magenta", 45),
+                ("BG Cyan", 46),
+                ("BG White", 47),
+                ("BG Bright Black", 100),
+                ("BG Bright Red", 101),
+                ("BG Bright Green", 102),
+                ("BG Bright Yellow", 103),
+                ("BG Bright Blue", 104),
+                ("BG Bright Magenta", 105),
+                ("BG Bright Cyan", 106),
+                ("BG Bright White", 107),
+            ];
+
+            for (name, code) in colors {
+                let ansi_sequence = format!("\x1b[{}m{}\x1b[0m", code, name);
+                let rich_text = ansi_to_rich_text(&ansi_sequence);
+                for text in rich_text {
+                    ui.label(text);
+                }
+                ui.label(" ");
+            }
+        });
+
+        ui.add_space(10.0);
+
+        // Show 8-bit background colors
+        ui.label("8-bit Background Colors (256 colors):");
+        ui.horizontal_wrapped(|ui| {
+            let sample_colors = [
+                (196, "Red BG"),
+                (208, "Orange BG"),
+                (46, "Green BG"),
+                (51, "Cyan BG"),
+                (21, "Blue BG"),
+                (165, "Purple BG"),
+            ];
+
+            for (code, name) in sample_colors {
+                let ansi_sequence = format!("\x1b[48;5;{}m{}\x1b[0m", code, name);
+                let rich_text = ansi_to_rich_text(&ansi_sequence);
+                for text in rich_text {
+                    ui.label(text);
+                }
+                ui.label(" ");
+            }
+        });
+
+        ui.add_space(10.0);
+
+        // Show 24-bit background colors
+        ui.label("24-bit True Color Background:");
+        ui.horizontal_wrapped(|ui| {
+            let sample_colors = [
+                ((255, 0, 0), "Pure Red BG"),
+                ((0, 255, 0), "Pure Green BG"),
+                ((0, 0, 255), "Pure Blue BG"),
+                ((255, 165, 0), "Orange BG"),
+                ((255, 105, 180), "Hot Pink BG"),
+                ((128, 0, 128), "Purple BG"),
+            ];
+
+            for ((r, g, b), name) in sample_colors {
+                let ansi_sequence = format!("\x1b[48;2;{};{};{}m{}\x1b[0m", r, g, b, name);
+                let rich_text = ansi_to_rich_text(&ansi_sequence);
+                for text in rich_text {
+                    ui.label(text);
+                }
+                ui.label(" ");
+            }
+        });
+
+        ui.add_space(10.0);
+
+        // Show foreground + background combinations
+        ui.label("Foreground + Background Color Combinations:");
+        ui.horizontal_wrapped(|ui| {
+            let combinations = [
+                ("\x1b[31;47mRed on White\x1b[0m", "4-bit"),
+                ("\x1b[38;5;208;48;5;21mOrange on Blue\x1b[0m", "8-bit"),
+                ("\x1b[38;2;255;255;255;48;2;128;0;0mWhite on Dark Red\x1b[0m", "24-bit"),
+            ];
+
+            for (ansi_seq, label) in combinations {
+                let rich_text = ansi_to_rich_text(ansi_seq);
+                for text in rich_text {
+                    ui.label(text);
+                }
+                ui.label(format!(" ({})", label));
             }
         });
     }
