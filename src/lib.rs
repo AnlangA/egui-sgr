@@ -638,7 +638,10 @@ mod tests {
 
         assert_eq!(colored_segments.len(), 1);
         assert_eq!(colored_segments[0].text, "Red");
-        assert_eq!(colored_segments[0].foreground_color, Some(Color32::from_rgb(255, 0, 0)));
+        assert_eq!(
+            colored_segments[0].foreground_color,
+            Some(Color32::from_rgb(255, 0, 0))
+        );
     }
 
     #[test]
@@ -649,7 +652,10 @@ mod tests {
 
         assert_eq!(colored_segments.len(), 1);
         assert_eq!(colored_segments[0].text, "Green BG");
-        assert_eq!(colored_segments[0].background_color, Some(Color32::from_rgb(0, 255, 0)));
+        assert_eq!(
+            colored_segments[0].background_color,
+            Some(Color32::from_rgb(0, 255, 0))
+        );
     }
 
     #[test]
@@ -748,7 +754,7 @@ mod tests {
     #[test]
     fn test_4bit_color_values() {
         use color_models::four_bit::ansi_color_to_egui;
-        
+
         assert_eq!(ansi_color_to_egui(0), Color32::BLACK);
         assert_eq!(ansi_color_to_egui(1), Color32::RED);
         assert_eq!(ansi_color_to_egui(2), Color32::GREEN);
@@ -759,7 +765,7 @@ mod tests {
     #[test]
     fn test_8bit_standard_colors() {
         use color_models::eight_bit::ansi_256_to_egui;
-        
+
         assert_eq!(ansi_256_to_egui(0), Color32::BLACK);
         assert_eq!(ansi_256_to_egui(1), Color32::RED);
         assert_eq!(ansi_256_to_egui(15), Color32::WHITE);
@@ -768,19 +774,19 @@ mod tests {
     #[test]
     fn test_8bit_rgb_cube() {
         use color_models::eight_bit::ansi_256_to_egui;
-        
+
         // 16 = (0,0,0) = black in RGB cube
         assert_eq!(ansi_256_to_egui(16), Color32::from_rgb(0, 0, 0));
         // 21 = (0,0,5) = pure blue
         assert_eq!(ansi_256_to_egui(21), Color32::from_rgb(0, 0, 255));
-        // 196 = (5,0,0) = pure red  
+        // 196 = (5,0,0) = pure red
         assert_eq!(ansi_256_to_egui(196), Color32::from_rgb(255, 0, 0));
     }
 
     #[test]
     fn test_8bit_grayscale() {
         use color_models::eight_bit::ansi_256_to_egui;
-        
+
         assert_eq!(ansi_256_to_egui(232), Color32::from_rgb(8, 8, 8));
         assert_eq!(ansi_256_to_egui(255), Color32::from_rgb(248, 248, 248));
     }

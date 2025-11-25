@@ -394,7 +394,10 @@ impl AnsiColorDemo {
             let combinations = [
                 ("\x1b[31;47mRed on White\x1b[0m", "4-bit"),
                 ("\x1b[38;5;208;48;5;21mOrange on Blue\x1b[0m", "8-bit"),
-                ("\x1b[38;2;255;255;255;48;2;128;0;0mWhite on Dark Red\x1b[0m", "24-bit"),
+                (
+                    "\x1b[38;2;255;255;255;48;2;128;0;0mWhite on Dark Red\x1b[0m",
+                    "24-bit",
+                ),
             ];
 
             for (ansi_seq, label) in combinations {
