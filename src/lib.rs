@@ -223,6 +223,7 @@ impl AnsiParser {
                 }
                 "38" => {
                     // Set foreground color
+                    // First check if we have at least 38;X;... (need at least 3 codes for 256-color mode)
                     if i + 2 < codes.len() {
                         match codes[i + 1] {
                             "5" => {
@@ -254,6 +255,7 @@ impl AnsiParser {
                 }
                 "48" => {
                     // Set background color
+                    // First check if we have at least 48;X;... (need at least 3 codes for 256-color mode)
                     if i + 2 < codes.len() {
                         match codes[i + 1] {
                             "5" => {
