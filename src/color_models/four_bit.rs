@@ -1,7 +1,14 @@
 use egui::{Color32, RichText};
+use regex::Regex;
+use std::sync::LazyLock;
 
-/// 4-bit color (16 colors) processing module
-/// Supports the standard 16-color mode in ANSI escape sequences
+// 4-bit color (16 colors) processing module
+// Supports the standard 16-color mode in ANSI escape sequences
+
+// Pre-compiled regex for matching 4-bit color sequences (cached for performance)
+static FOUR_BIT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^([34][0-7]|9[0-7]|10[0-7])$").expect("Invalid 4-bit color regex pattern")
+});
 
 // Standard color mapping
 const COLORS: [Color32; 16] = [
@@ -57,10 +64,8 @@ pub fn apply_background_color(text: &str, color_code: u8) -> RichText {
 /// # Returns
 /// RichText with the color applied
 pub fn parse_4bit_color(text: &str, sequence: &str, is_background: bool) -> Option<RichText> {
-    // Matches standard 4-bit color sequences
-    let re = regex::Regex::new(r"^([34][0-7]|9[0-7]|10[0-7])$").ok()?;
-
-    if !re.is_match(sequence) {
+    // Use pre-compiled regex for matching 4-bit color sequences
+    if !FOUR_BIT_REGEX.is_match(sequence) {
         return None;
     }
 
