@@ -41,9 +41,9 @@ pub fn ansi_256_to_egui(color_code: u8) -> Color32 {
         16..=231 => {
             // Calculate RGB values
             let code = color_code - 16;
-            let r = (code / 36) as u8; // Red component
-            let g = ((code % 36) / 6) as u8; // Green component
-            let b = (code % 6) as u8; // Blue component
+            let r = code / 36;          // Red component
+            let g = (code % 36) / 6;    // Green component
+            let b = code % 6;           // Blue component
 
             // Convert values from 0-5 to the 0-255 range
             // The formula for ANSI 256-color cube components is: 40c + 55 (for c=1..4), 0 (for c=0), 255 (for c=5)
