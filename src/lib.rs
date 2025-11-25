@@ -24,8 +24,13 @@
 
 use egui::{Color32, RichText};
 use regex::Regex;
+use std::sync::LazyLock;
 
 mod color_models;
+
+/// Pre-compiled regex for matching ANSI escape sequences (cached for performance)
+static ANSI_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\x1b\[([0-9;]+)m").expect("Invalid ANSI regex pattern"));
 
 // Re-export color model modules
 pub use color_models::*;
@@ -138,23 +143,10 @@ impl AnsiParser {
         // Reset current colors
         self.reset_colors();
 
-        // Regular expression to match ANSI escape sequences
-        let ansi_re = match Regex::new(r"\x1b\[([0-9;]+)m") {
-            Ok(re) => re,
-            Err(_) => {
-                // If the regex fails to compile, return the original text
-                return vec![ColoredText {
-                    text: input.to_string(),
-                    foreground_color: None,
-                    background_color: None,
-                }];
-            }
-        };
-
         let mut last_end = 0;
 
-        // Iterate over all matched ANSI sequences
-        for cap in ansi_re.captures_iter(input) {
+        // Iterate over all matched ANSI sequences using pre-compiled regex
+        for cap in ANSI_REGEX.captures_iter(input) {
             let sequence = cap.get(1).unwrap().as_str();
             let start = cap.get(0).unwrap().start();
             let end = cap.get(0).unwrap().end();

@@ -1,11 +1,16 @@
 use egui::{Color32, RichText};
+use regex::Regex;
+use std::sync::LazyLock;
 
-/// Converts an 8-bit color code (0-255) to an egui Color32.
-///
-/// The 256-color palette is divided into:
-/// - 0-15: Standard 16 colors (same as 4-bit)
-/// - 16-231: 6×6×6 RGB color cube
-/// - 232-255: 24 levels of grayscale
+// 8-bit color (256 colors) processing module
+// Supports the 256-color mode in ANSI escape sequences
+// Includes 16 colors, a 6x6x6 RGB cube, and 24 levels of grayscale
+
+// Pre-compiled regex for matching 8-bit color sequences (cached for performance)
+static EIGHT_BIT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^5;(\d+)$").expect("Invalid 8-bit color regex pattern"));
+
+/// Converts an 8-bit color code to an egui color
 ///
 /// # Arguments
 /// - `color_code`: A color code from 0-255
@@ -88,10 +93,8 @@ pub fn apply_background_color(text: &str, color_code: u8) -> RichText {
 /// # Returns
 /// RichText with the color applied
 pub fn parse_8bit_color(text: &str, sequence: &str, is_background: bool) -> Option<RichText> {
-    // Matches 8-bit color sequences of the format: 5;<n> where n is 0-255
-    let re = regex::Regex::new(r"^5;(\d+)$").ok()?;
-
-    let caps = re.captures(sequence)?;
+    // Use pre-compiled regex for matching 8-bit color sequences
+    let caps = EIGHT_BIT_REGEX.captures(sequence)?;
     let color_str = caps.get(1)?.as_str();
 
     if let Ok(color_code) = color_str.parse::<u8>() {
