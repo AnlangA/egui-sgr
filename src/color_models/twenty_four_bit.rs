@@ -1,10 +1,10 @@
 use egui::{Color32, RichText};
 
-/// 24-bit true color processing module
-/// Supports the true color mode in ANSI escape sequences
-/// Can directly specify RGB values, theoretically displaying 16.77 million colors
-
-/// Converts RGB values to an egui color
+/// Converts RGB values to an egui Color32.
+///
+/// This function handles 24-bit true color mode which allows
+/// direct specification of RGB values (0-255 each component),
+/// providing access to the full 16.77 million color palette.
 ///
 /// # Arguments
 /// - `r`: Red component (0-255)

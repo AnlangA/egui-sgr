@@ -1,9 +1,9 @@
 use egui::{Color32, RichText};
 
-/// 4-bit color (16 colors) processing module
-/// Supports the standard 16-color mode in ANSI escape sequences
-
-// Standard color mapping
+/// Standard 16-color palette for 4-bit ANSI color codes.
+///
+/// Colors 0-7 are standard colors (30-37 foreground, 40-47 background).
+/// Colors 8-15 are bright variants (90-97 foreground, 100-107 background).
 const COLORS: [Color32; 16] = [
     // 0-7: Standard colors
     Color32::BLACK,                   // Black (30/40)

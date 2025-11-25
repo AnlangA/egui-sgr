@@ -1,10 +1,11 @@
 use egui::{Color32, RichText};
 
-/// 8-bit color (256 colors) processing module
-/// Supports the 256-color mode in ANSI escape sequences
-/// Includes 16 colors, a 6x6x6 RGB cube, and 24 levels of grayscale
-
-/// Converts an 8-bit color code to an egui color
+/// Converts an 8-bit color code (0-255) to an egui Color32.
+///
+/// The 256-color palette is divided into:
+/// - 0-15: Standard 16 colors (same as 4-bit)
+/// - 16-231: 6×6×6 RGB color cube
+/// - 232-255: 24 levels of grayscale
 ///
 /// # Arguments
 /// - `color_code`: A color code from 0-255
@@ -35,9 +36,9 @@ pub fn ansi_256_to_egui(color_code: u8) -> Color32 {
         16..=231 => {
             // Calculate RGB values
             let code = color_code - 16;
-            let r = (code / 36) as u8; // Red component
-            let g = ((code % 36) / 6) as u8; // Green component
-            let b = (code % 6) as u8; // Blue component
+            let r = code / 36;          // Red component
+            let g = (code % 36) / 6;    // Green component
+            let b = code % 6;           // Blue component
 
             // Convert values from 0-5 to the 0-255 range
             // The formula for ANSI 256-color cube components is: 40c + 55 (for c=1..4), 0 (for c=0), 255 (for c=5)
