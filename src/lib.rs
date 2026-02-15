@@ -9,6 +9,8 @@
 //! - Supports 24-bit true color model
 //! - Automatically detects and converts mixed color sequences
 //! - Supports simultaneous setting of foreground and background colors
+//! - Handles malformed ANSI sequences gracefully
+//! - Strips non-SGR control sequences (OSC, etc.)
 //!
 //! ## Usage Example
 //!
@@ -20,6 +22,8 @@
 //! let orange_text = ansi_to_rich_text("\x1b[38;5;208mOrange Text\x1b[0m");
 //! let pink_text = ansi_to_rich_text("\x1b[38;2;255;105;180mPink Text\x1b[0m");
 //! let colored_bg = ansi_to_rich_text("\x1b[41;33mYellow on Red\x1b[0m");
+//! // Empty reset sequence (equivalent to [0m)
+//! let reset_text = ansi_to_rich_text("\x1b[31mRed\x1b[mDefault");
 //! ```
 
 use egui::{Color32, RichText};
@@ -28,9 +32,34 @@ use std::sync::LazyLock;
 
 mod color_models;
 
-/// Pre-compiled regex for matching ANSI escape sequences (cached for performance)
-static ANSI_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\x1b\[([0-9;]+)m").expect("Invalid ANSI regex pattern"));
+/// Pre-compiled regex for matching CSI (Control Sequence Introducer) ANSI escape sequences
+/// Matches: ESC [ <params> <final byte>
+/// This includes SGR (Select Graphic Rendition) and other CSI sequences
+static CSI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    // CSI sequences: ESC [ followed by parameter bytes (0-9, semicolon, etc.)
+    // ending with a final byte (letter or @)
+    Regex::new(r"\x1b\[([0-9;]*)([A-Za-z@])")
+        .expect("Invalid CSI regex pattern")
+});
+
+/// Pre-compiled regex for matching OSC (Operating System Command) sequences
+/// OSC sequences: ESC ] ... ST (String Terminator = ESC \ or BEL)
+static OSC_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    // Match OSC sequences: ESC ] ... (BEL or ESC \)
+    Regex::new(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
+        .expect("Invalid OSC regex pattern")
+});
+
+/// Pre-compiled regex for matching other common escape sequences
+/// Includes: ESC followed by a single character (0x40-0x5A), excluding [ (CSI) and ] (OSC)
+static OTHER_ESC_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    // Match other escape sequences (non-CSI, non-OSC)
+    // ESC followed by single char: @, A-Z, ^, _, but NOT [ (CSI) or ] (OSC)
+    // Hex ranges: 0x40-0x5A (@, A-Z), 0x5E (^), 0x5F (_)
+    // Excluding 0x5B ([) and 0x5D (])
+    Regex::new(r"\x1b[\x40-\x5A\x5E\x5F]")
+        .expect("Invalid escape regex pattern")
+});
 
 // Re-export color model modules
 pub use color_models::*;
@@ -130,24 +159,38 @@ impl AnsiParser {
     /// # Returns
     /// A list of text segments with color information
     pub fn parse(&mut self, input: &str) -> Vec<ColoredText> {
-        // Directly parse input - don't preprocess escape sequences
-        // Only handle actual control characters for egui display compatibility
-        self.parse_direct(input)
+        // First, strip non-SGR sequences (OSC, other escape sequences)
+        let cleaned = self.strip_non_sgr_sequences(input);
+        // Then parse SGR sequences
+        self.parse_sgr(&cleaned)
     }
 
-    /// Parse text containing ANSI escape sequences without preprocessing
-    fn parse_direct(&mut self, input: &str) -> Vec<ColoredText> {
-        // Initialize the result list
+    /// Strip non-SGR ANSI sequences that shouldn't appear as visible text
+    fn strip_non_sgr_sequences(&self, input: &str) -> String {
+        let mut result = input.to_string();
+
+        // Remove OSC sequences (Operating System Command)
+        result = OSC_REGEX.replace_all(&result, "").to_string();
+
+        // Remove other escape sequences (non-CSI)
+        result = OTHER_ESC_REGEX.replace_all(&result, "").to_string();
+
+        result
+    }
+
+    /// Parse SGR (Select Graphic Rendition) sequences
+    fn parse_sgr(&mut self, input: &str) -> Vec<ColoredText> {
         let mut result = Vec::new();
 
-        // Reset current colors
+        // Reset current colors at start of new input
         self.reset_colors();
 
         let mut last_end = 0;
 
-        // Iterate over all matched ANSI sequences using pre-compiled regex
-        for cap in ANSI_REGEX.captures_iter(input) {
-            let sequence = cap.get(1).unwrap().as_str();
+        // Iterate over all matched CSI sequences using pre-compiled regex
+        for cap in CSI_REGEX.captures_iter(input) {
+            let params = cap.get(1).unwrap().as_str();
+            let final_byte = cap.get(2).unwrap().as_str();
             let start = cap.get(0).unwrap().start();
             let end = cap.get(0).unwrap().end();
 
@@ -163,8 +206,16 @@ impl AnsiParser {
                 }
             }
 
-            // Process the ANSI sequence to update the current color
-            self.process_ansi_sequence(sequence);
+            // Only process SGR sequences (ending with 'm')
+            if final_byte == "m" {
+                // Empty params means reset (equivalent to [0m)
+                if params.is_empty() {
+                    self.reset_colors();
+                } else {
+                    self.process_sgr_sequence(params);
+                }
+            }
+            // Other CSI sequences are silently ignored (cursor movement, etc.)
 
             last_end = end;
         }
@@ -182,7 +233,7 @@ impl AnsiParser {
         }
 
         // If no escape sequences were found, return the entire text
-        if result.is_empty() {
+        if result.is_empty() && !input.is_empty() {
             return vec![ColoredText {
                 text: input.to_string(),
                 foreground_color: None,
@@ -199,23 +250,54 @@ impl AnsiParser {
         self.current_bg = None;
     }
 
-    /// Processes a single ANSI escape sequence and updates the current color cache
+    /// Processes a single SGR sequence and updates the current color cache
     ///
     /// # Arguments
-    /// - `sequence`: The ANSI escape sequence
-    fn process_ansi_sequence(&mut self, sequence: &str) {
+    /// - `sequence`: The SGR parameter string (e.g., "31", "38;5;208", "0")
+    fn process_sgr_sequence(&mut self, sequence: &str) {
         let codes: Vec<&str> = sequence.split(';').collect();
         let mut i = 0;
 
         while i < codes.len() {
+            // Handle empty code (e.g., from leading/trailing semicolons)
+            if codes[i].is_empty() {
+                i += 1;
+                continue;
+            }
+
             match codes[i] {
-                "0" => {
+                "0" | "" => {
+                    // Reset (0 or empty means reset)
                     self.reset_colors();
+                    i += 1;
+                }
+                "1" => {
+                    // Bold - we don't support this in egui, skip
+                    i += 1;
+                }
+                "4" => {
+                    // Underline - we don't support this in egui, skip
+                    i += 1;
+                }
+                "7" => {
+                    // Reverse video - swap fg and bg
+                    std::mem::swap(&mut self.current_fg, &mut self.current_bg);
+                    i += 1;
+                }
+                "22" => {
+                    // Normal intensity (not bold)
+                    i += 1;
+                }
+                "24" => {
+                    // Not underlined
+                    i += 1;
+                }
+                "27" => {
+                    // Not reversed
                     i += 1;
                 }
                 "38" => {
                     // Set foreground color
-                    // First check if we have at least 38;X;... (need at least 3 codes for 256-color mode)
                     if i + 2 < codes.len() {
                         match codes[i + 1] {
                             "5" => {
@@ -226,16 +308,20 @@ impl AnsiParser {
                                 }
                                 i += 3; // Skip 38, 5, and the color code
                             }
-                            "2" if i + 4 < codes.len() => {
+                            "2" => {
                                 // 24-bit true color mode: 38;2;r;g;b
-                                if let (Ok(r), Ok(g), Ok(b)) = (
-                                    codes[i + 2].parse::<u8>(),
-                                    codes[i + 3].parse::<u8>(),
-                                    codes[i + 4].parse::<u8>(),
-                                ) {
-                                    self.current_fg = Some(Color32::from_rgb(r, g, b));
+                                if i + 4 < codes.len() {
+                                    if let (Ok(r), Ok(g), Ok(b)) = (
+                                        codes[i + 2].parse::<u8>(),
+                                        codes[i + 3].parse::<u8>(),
+                                        codes[i + 4].parse::<u8>(),
+                                    ) {
+                                        self.current_fg = Some(Color32::from_rgb(r, g, b));
+                                    }
+                                    i += 5; // Skip 38, 2, r, g, b
+                                } else {
+                                    i += 1;
                                 }
-                                i += 5; // Skip 38, 2, r, g, b
                             }
                             _ => {
                                 i += 1;
@@ -247,7 +333,6 @@ impl AnsiParser {
                 }
                 "48" => {
                     // Set background color
-                    // First check if we have at least 48;X;... (need at least 3 codes for 256-color mode)
                     if i + 2 < codes.len() {
                         match codes[i + 1] {
                             "5" => {
@@ -258,16 +343,20 @@ impl AnsiParser {
                                 }
                                 i += 3; // Skip 48, 5, and the color code
                             }
-                            "2" if i + 4 < codes.len() => {
+                            "2" => {
                                 // 24-bit true color mode: 48;2;r;g;b
-                                if let (Ok(r), Ok(g), Ok(b)) = (
-                                    codes[i + 2].parse::<u8>(),
-                                    codes[i + 3].parse::<u8>(),
-                                    codes[i + 4].parse::<u8>(),
-                                ) {
-                                    self.current_bg = Some(Color32::from_rgb(r, g, b));
+                                if i + 4 < codes.len() {
+                                    if let (Ok(r), Ok(g), Ok(b)) = (
+                                        codes[i + 2].parse::<u8>(),
+                                        codes[i + 3].parse::<u8>(),
+                                        codes[i + 4].parse::<u8>(),
+                                    ) {
+                                        self.current_bg = Some(Color32::from_rgb(r, g, b));
+                                    }
+                                    i += 5; // Skip 48, 2, r, g, b
+                                } else {
+                                    i += 1;
                                 }
-                                i += 5; // Skip 48, 2, r, g, b
                             }
                             _ => {
                                 i += 1;
@@ -278,10 +367,12 @@ impl AnsiParser {
                     }
                 }
                 "39" => {
+                    // Default foreground color
                     self.current_fg = None;
                     i += 1;
                 }
                 "49" => {
+                    // Default background color
                     self.current_bg = None;
                     i += 1;
                 }
@@ -789,5 +880,140 @@ mod tests {
 
         assert_eq!(ansi_256_to_egui(232), Color32::from_rgb(8, 8, 8));
         assert_eq!(ansi_256_to_egui(255), Color32::from_rgb(248, 248, 248));
+    }
+
+    // Tests for empty parameter reset sequence
+    #[test]
+    fn test_empty_reset_sequence() {
+        // \x1b[m should be treated as \x1b[0m (reset)
+        let input = "\x1b[31mRed\x1b[mDefault";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        assert_eq!(colored_segments.len(), 2);
+        assert_eq!(colored_segments[0].text, "Red");
+        assert!(colored_segments[0].foreground_color.is_some());
+        assert_eq!(colored_segments[1].text, "Default");
+        assert!(colored_segments[1].foreground_color.is_none());
+    }
+
+    #[test]
+    fn test_empty_reset_at_start() {
+        let input = "\x1b[mPlain text";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        assert_eq!(colored_segments.len(), 1);
+        assert_eq!(colored_segments[0].text, "Plain text");
+        assert!(colored_segments[0].foreground_color.is_none());
+    }
+
+    // Tests for Linux terminal prompt format
+    #[test]
+    fn test_linux_prompt_format() {
+        // Typical Linux prompt with colors: \x1b[1;31mroot\x1b[m@\x1b[1;34mhostname\x1b[m:#
+        let input = "\x1b[1;31mroot\x1b[m@\x1b[1;34mhost\x1b[m:#";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        // Should have: root, @, host, :#
+        assert!(!colored_segments.is_empty());
+        // Verify text is properly separated
+        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(combined, "root@host:#");
+    }
+
+    #[test]
+    fn test_bash_prompt_colors() {
+        // Test typical bash PS1 colors
+        let input = "\x1b[1;34muser@host\x1b[m:\x1b[1;32m~\x1b[m$ ";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(combined, "user@host:~$ ");
+    }
+
+    // Tests for non-SGR sequence stripping
+    #[test]
+    fn test_osc_sequence_stripped() {
+        // OSC sequence for setting window title: \x1b]0;Title\x07
+        let input = "Before\x1b]0;Window Title\x07After";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(combined, "BeforeAfter");
+    }
+
+    #[test]
+    fn test_osc_with_bel_terminator() {
+        let input = "\x1b]2;Title\x07Text";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(combined, "Text");
+    }
+
+    #[test]
+    fn test_csi_cursor_movement_ignored() {
+        // Cursor movement sequences should be ignored but not appear in output
+        let input = "\x1b[2J\x1b[H\x1b[31mRed\x1b[0m";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        assert_eq!(colored_segments.len(), 1);
+        assert_eq!(colored_segments[0].text, "Red");
+    }
+
+    #[test]
+    fn test_complex_terminal_output() {
+        // Complex output with multiple sequences
+        let input = "\x1b[1;31mError:\x1b[m \x1b[33mFile not found\x1b[m\n\x1b[32mDone\x1b[m";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
+        assert!(combined.contains("Error:"));
+        assert!(combined.contains("File not found"));
+        assert!(combined.contains("Done"));
+    }
+
+    #[test]
+    fn test_osc_without_terminator() {
+        // OSC sequence without proper terminator - should still be stripped
+        let input = "Start\x1b]0;No terminatorText";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
+        // Should not contain the OSC sequence
+        assert!(!combined.contains("\x1b]"));
+    }
+
+    #[test]
+    fn test_reverse_video() {
+        // Test reverse video (swap foreground and background)
+        let input = "\x1b[31;42mRed on Green\x1b[7mSwapped\x1b[0m";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        assert_eq!(colored_segments.len(), 2);
+        assert_eq!(colored_segments[0].text, "Red on Green");
+        assert_eq!(colored_segments[1].text, "Swapped");
+        // After reverse, foreground should be previous background
+        assert!(colored_segments[1].foreground_color.is_some());
+    }
+
+    #[test]
+    fn test_text_attributes() {
+        // Test that text attributes (bold, underline) are handled gracefully
+        let input = "\x1b[1mBold\x1b[22m\x1b[4mUnderline\x1b[24mNormal";
+        let mut parser = AnsiParser::new();
+        let colored_segments = parser.parse(input);
+
+        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(combined, "BoldUnderlineNormal");
     }
 }
