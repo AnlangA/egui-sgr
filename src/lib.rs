@@ -233,7 +233,7 @@ impl AnsiParser {
         }
 
         // If no escape sequences were found, return the entire text
-        if result.is_empty() && !input.is_empty() {
+        if result.is_empty() {
             return vec![ColoredText {
                 text: input.to_string(),
                 foreground_color: None,
