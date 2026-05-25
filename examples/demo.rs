@@ -40,38 +40,38 @@ impl Default for AnsiColorDemo {
 }
 
 impl App for AnsiColorDemo {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("egui_sgr Demo - ANSI Escape Sequence Color Model Conversion");
-            ui.separator();
+    fn update(&mut self, _ctx: &egui::Context, _frame: &mut Frame) {}
 
-            egui::ScrollArea::vertical()
-                .id_salt("demo_scroll")
-                .show(ui, |ui| {
-                    // 4-bit color example
-                    self.show_4bit_example(ui);
-                    ui.add_space(20.0);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut Frame) {
+        ui.heading("egui_sgr Demo - ANSI Escape Sequence Color Model Conversion");
+        ui.separator();
 
-                    // 8-bit color example
-                    self.show_8bit_example(ui);
-                    ui.add_space(20.0);
+        egui::ScrollArea::vertical()
+            .id_salt("demo_scroll")
+            .show(ui, |ui| {
+                // 4-bit color example
+                self.show_4bit_example(ui);
+                ui.add_space(20.0);
 
-                    // 24-bit color example
-                    self.show_24bit_example(ui);
-                    ui.add_space(20.0);
+                // 8-bit color example
+                self.show_8bit_example(ui);
+                ui.add_space(20.0);
 
-                    // Mixed color example
-                    self.show_mixed_example(ui);
-                    ui.add_space(20.0);
+                // 24-bit color example
+                self.show_24bit_example(ui);
+                ui.add_space(20.0);
 
-                    // Background color example
-                    self.show_background_example(ui);
-                    ui.add_space(20.0);
+                // Mixed color example
+                self.show_mixed_example(ui);
+                ui.add_space(20.0);
 
-                    // Custom input
-                    self.show_custom_input(ui);
-                });
-        });
+                // Background color example
+                self.show_background_example(ui);
+                ui.add_space(20.0);
+
+                // Custom input
+                self.show_custom_input(ui);
+            });
     }
 }
 
