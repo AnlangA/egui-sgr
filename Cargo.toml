@@ -12,11 +12,11 @@ keywords = ["egui", "ansi", "color", "terminal", "parsing"]
 categories = ["gui", "text-processing"]
 
 [dependencies]
-egui = "0.33.2"
+egui = "0.34.2"
 regex = "1.12.2"
 
 [dev-dependencies]
-eframe = "0.33.2"
+eframe = "0.34.2"
 
 [[example]]
 name = "demo"
