@@ -1,1019 +1,611 @@
-//! # egui_sgr
+#![forbid(unsafe_code)]
+#![warn(missing_docs, rustdoc::broken_intra_doc_links)]
+
+//! Convert ANSI/SGR text into egui text representations.
 //!
-//! A library for converting ASCII/ANSI escape sequence color models to colored text in egui.
-//!
-//! ## Features
-//!
-//! - Supports 4-bit color (16 colors) model
-//! - Supports 8-bit color (256 colors) model
-//! - Supports 24-bit true color model
-//! - Automatically detects and converts mixed color sequences
-//! - Supports simultaneous setting of foreground and background colors
-//! - Handles malformed ANSI sequences gracefully
-//! - Strips non-SGR control sequences (OSC, etc.)
-//!
-//! ## Usage Example
+//! The primary output is [`egui::text::LayoutJob`], because ANSI text is a
+//! single logical string with style changes inside it. Compatibility helpers
+//! for [`egui::RichText`] and the older [`ColoredText`] model are still
+//! available.
 //!
 //! ```rust
-//! use egui_sgr::ansi_to_rich_text;
+//! use egui_sgr::{ansi_to_layout_job, EguiAnsiTheme};
 //!
-//! // Convert ANSI color sequences to egui RichText
-//! let red_text = ansi_to_rich_text("\x1b[31mRed Text\x1b[0m");
-//! let orange_text = ansi_to_rich_text("\x1b[38;5;208mOrange Text\x1b[0m");
-//! let pink_text = ansi_to_rich_text("\x1b[38;2;255;105;180mPink Text\x1b[0m");
-//! let colored_bg = ansi_to_rich_text("\x1b[41;33mYellow on Red\x1b[0m");
-//! // Empty reset sequence (equivalent to [0m)
-//! let reset_text = ansi_to_rich_text("\x1b[31mRed\x1b[mDefault");
+//! let theme = EguiAnsiTheme::default();
+//! let job = ansi_to_layout_job("\x1b[31mred\x1b[0m default", &theme);
+//! assert_eq!(job.text, "red default");
 //! ```
 
-use egui::{Color32, RichText};
-use regex::Regex;
-use std::sync::LazyLock;
+mod egui_render;
+mod model;
+mod parser;
+mod sgr;
+mod theme;
 
-mod color_models;
+/// Legacy color conversion helpers.
+pub mod color_models;
 
-/// Pre-compiled regex for matching CSI (Control Sequence Introducer) ANSI escape sequences
-/// Matches: ESC [ <params> <final byte>
-/// This includes SGR (Select Graphic Rendition) and other CSI sequences
-static CSI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    // CSI sequences: ESC [ followed by parameter bytes (0-9, semicolon, etc.)
-    // ending with a final byte (letter or @)
-    Regex::new(r"\x1b\[([0-9;]*)([A-Za-z@])")
-        .expect("Invalid CSI regex pattern")
-});
-
-/// Pre-compiled regex for matching OSC (Operating System Command) sequences
-/// OSC sequences: ESC ] ... ST (String Terminator = ESC \ or BEL)
-static OSC_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    // Match OSC sequences: ESC ] ... (BEL or ESC \)
-    Regex::new(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
-        .expect("Invalid OSC regex pattern")
-});
-
-/// Pre-compiled regex for matching other common escape sequences
-/// Includes: ESC followed by a single character (0x40-0x5A), excluding [ (CSI) and ] (OSC)
-static OTHER_ESC_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    // Match other escape sequences (non-CSI, non-OSC)
-    // ESC followed by single char: @, A-Z, ^, _, but NOT [ (CSI) or ] (OSC)
-    // Hex ranges: 0x40-0x5A (@, A-Z), 0x5E (^), 0x5F (_)
-    // Excluding 0x5B ([) and 0x5D (])
-    Regex::new(r"\x1b[\x40-\x5A\x5E\x5F]")
-        .expect("Invalid escape regex pattern")
-});
-
-// Re-export color model modules
 pub use color_models::*;
+pub use egui_render::{
+    ansi_bytes_to_layout_job, ansi_to_layout_job, ansi_to_rich_text, ansi_to_rich_text_with_theme,
+    convert_to_rich_text, spans_to_layout_job, spans_to_rich_text,
+};
+pub use model::{AnsiColor, AnsiIntensity, AnsiSpan, AnsiStyle, ColoredText, UnderlineStyle};
+pub use parser::{AnsiSpanBuffer, AnsiStreamParser, ansi_bytes_to_spans, ansi_to_spans};
+pub use theme::EguiAnsiTheme;
 
-/// Represents a text segment with optional foreground and background color information.
+/// Compatibility parser that returns the legacy foreground/background model.
 ///
-/// This struct is the output of parsing ANSI escape sequences, where each segment
-/// represents a continuous piece of text with consistent color attributes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColoredText {
-    /// The text content of this segment
-    pub text: String,
-    /// Optional foreground (text) color
-    pub foreground_color: Option<Color32>,
-    /// Optional background color
-    pub background_color: Option<Color32>,
-}
-
-impl ColoredText {
-    /// Creates a new ColoredText with no colors applied.
-    #[must_use]
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            foreground_color: None,
-            background_color: None,
-        }
-    }
-
-    /// Creates a new ColoredText with the specified foreground color.
-    #[must_use]
-    pub fn with_foreground(text: impl Into<String>, color: Color32) -> Self {
-        Self {
-            text: text.into(),
-            foreground_color: Some(color),
-            background_color: None,
-        }
-    }
-
-    /// Creates a new ColoredText with the specified background color.
-    #[must_use]
-    pub fn with_background(text: impl Into<String>, color: Color32) -> Self {
-        Self {
-            text: text.into(),
-            foreground_color: None,
-            background_color: Some(color),
-        }
-    }
-
-    /// Creates a new ColoredText with both foreground and background colors.
-    #[must_use]
-    pub fn with_colors(
-        text: impl Into<String>,
-        foreground: Option<Color32>,
-        background: Option<Color32>,
-    ) -> Self {
-        Self {
-            text: text.into(),
-            foreground_color: foreground,
-            background_color: background,
-        }
-    }
-}
-
-/// ANSI escape sequence parser that converts ANSI color codes to egui colors.
-///
-/// This parser maintains color state between escape sequences, allowing for
-/// proper handling of sequential color changes and nested formatting.
-#[derive(Debug, Clone)]
-pub struct AnsiParser {
-    /// Currently cached foreground color
-    current_fg: Option<Color32>,
-    /// Currently cached background color
-    current_bg: Option<Color32>,
-}
-
-impl Default for AnsiParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// This parser intentionally keeps the historical one-shot behavior: every call
+/// to [`AnsiParser::parse`] starts from the default style. Use
+/// [`AnsiStreamParser`] when ANSI state must survive across chunks.
+#[derive(Debug, Default, Clone)]
+pub struct AnsiParser;
 
 impl AnsiParser {
-    /// Creates a new ANSI parser with no active colors.
+    /// Creates a new one-shot compatibility parser.
+    #[must_use]
     pub fn new() -> Self {
-        Self {
-            current_fg: None,
-            current_bg: None,
-        }
+        Self
     }
 
-    /// Parses text containing ANSI escape sequences
-    ///
-    /// # Arguments
-    /// - `input`: Text containing ANSI escape sequences
-    ///
-    /// # Returns
-    /// A list of text segments with color information
+    /// Parses ANSI/SGR text into the legacy [`ColoredText`] representation.
+    #[must_use]
     pub fn parse(&mut self, input: &str) -> Vec<ColoredText> {
-        // First, strip non-SGR sequences (OSC, other escape sequences)
-        let cleaned = self.strip_non_sgr_sequences(input);
-        // Then parse SGR sequences
-        self.parse_sgr(&cleaned)
-    }
-
-    /// Strip non-SGR ANSI sequences that shouldn't appear as visible text
-    fn strip_non_sgr_sequences(&self, input: &str) -> String {
-        let mut result = input.to_string();
-
-        // Remove OSC sequences (Operating System Command)
-        result = OSC_REGEX.replace_all(&result, "").to_string();
-
-        // Remove other escape sequences (non-CSI)
-        result = OTHER_ESC_REGEX.replace_all(&result, "").to_string();
-
-        result
-    }
-
-    /// Parse SGR (Select Graphic Rendition) sequences
-    fn parse_sgr(&mut self, input: &str) -> Vec<ColoredText> {
-        let mut result = Vec::new();
-
-        // Reset current colors at start of new input
-        self.reset_colors();
-
-        let mut last_end = 0;
-
-        // Iterate over all matched CSI sequences using pre-compiled regex
-        for cap in CSI_REGEX.captures_iter(input) {
-            let params = cap.get(1).unwrap().as_str();
-            let final_byte = cap.get(2).unwrap().as_str();
-            let start = cap.get(0).unwrap().start();
-            let end = cap.get(0).unwrap().end();
-
-            // Add the text before the escape sequence (if any)
-            if start > last_end {
-                let plain_text = &input[last_end..start];
-                if !plain_text.is_empty() {
-                    result.push(ColoredText {
-                        text: plain_text.to_string(),
-                        foreground_color: self.current_fg,
-                        background_color: self.current_bg,
-                    });
-                }
-            }
-
-            // Only process SGR sequences (ending with 'm')
-            if final_byte == "m" {
-                // Empty params means reset (equivalent to [0m)
-                if params.is_empty() {
-                    self.reset_colors();
-                } else {
-                    self.process_sgr_sequence(params);
-                }
-            }
-            // Other CSI sequences are silently ignored (cursor movement, etc.)
-
-            last_end = end;
+        if input.is_empty() {
+            return vec![ColoredText::new("")];
         }
 
-        // Add the remaining text (if any)
-        if last_end < input.len() {
-            let plain_text = &input[last_end..];
-            if !plain_text.is_empty() {
-                result.push(ColoredText {
-                    text: plain_text.to_string(),
-                    foreground_color: self.current_fg,
-                    background_color: self.current_bg,
-                });
-            }
-        }
-
-        // If no escape sequences were found, return the entire text
-        if result.is_empty() {
-            return vec![ColoredText {
-                text: input.to_string(),
-                foreground_color: None,
-                background_color: None,
-            }];
-        }
-
-        result
-    }
-
-    /// Resets the current colors
-    fn reset_colors(&mut self) {
-        self.current_fg = None;
-        self.current_bg = None;
-    }
-
-    /// Processes a single SGR sequence and updates the current color cache
-    ///
-    /// # Arguments
-    /// - `sequence`: The SGR parameter string (e.g., "31", "38;5;208", "0")
-    fn process_sgr_sequence(&mut self, sequence: &str) {
-        let codes: Vec<&str> = sequence.split(';').collect();
-        let mut i = 0;
-
-        while i < codes.len() {
-            // Handle empty code (e.g., from leading/trailing semicolons)
-            if codes[i].is_empty() {
-                i += 1;
-                continue;
-            }
-
-            match codes[i] {
-                "0" | "" => {
-                    // Reset (0 or empty means reset)
-                    self.reset_colors();
-                    i += 1;
-                }
-                "1" => {
-                    // Bold - we don't support this in egui, skip
-                    i += 1;
-                }
-                "4" => {
-                    // Underline - we don't support this in egui, skip
-                    i += 1;
-                }
-                "7" => {
-                    // Reverse video - swap fg and bg
-                    std::mem::swap(&mut self.current_fg, &mut self.current_bg);
-                    i += 1;
-                }
-                "22" => {
-                    // Normal intensity (not bold)
-                    i += 1;
-                }
-                "24" => {
-                    // Not underlined
-                    i += 1;
-                }
-                "27" => {
-                    // Not reversed
-                    i += 1;
-                }
-                "38" => {
-                    // Set foreground color
-                    if i + 2 < codes.len() {
-                        match codes[i + 1] {
-                            "5" => {
-                                // 256-color mode: 38;5;n
-                                if let Ok(color_code) = codes[i + 2].parse::<u8>() {
-                                    self.current_fg =
-                                        Some(color_models::eight_bit::ansi_256_to_egui(color_code));
-                                }
-                                i += 3; // Skip 38, 5, and the color code
-                            }
-                            "2" => {
-                                // 24-bit true color mode: 38;2;r;g;b
-                                if i + 4 < codes.len() {
-                                    if let (Ok(r), Ok(g), Ok(b)) = (
-                                        codes[i + 2].parse::<u8>(),
-                                        codes[i + 3].parse::<u8>(),
-                                        codes[i + 4].parse::<u8>(),
-                                    ) {
-                                        self.current_fg = Some(Color32::from_rgb(r, g, b));
-                                    }
-                                    i += 5; // Skip 38, 2, r, g, b
-                                } else {
-                                    i += 1;
-                                }
-                            }
-                            _ => {
-                                i += 1;
-                            }
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-                "48" => {
-                    // Set background color
-                    if i + 2 < codes.len() {
-                        match codes[i + 1] {
-                            "5" => {
-                                // 256-color mode: 48;5;n
-                                if let Ok(color_code) = codes[i + 2].parse::<u8>() {
-                                    self.current_bg =
-                                        Some(color_models::eight_bit::ansi_256_to_egui(color_code));
-                                }
-                                i += 3; // Skip 48, 5, and the color code
-                            }
-                            "2" => {
-                                // 24-bit true color mode: 48;2;r;g;b
-                                if i + 4 < codes.len() {
-                                    if let (Ok(r), Ok(g), Ok(b)) = (
-                                        codes[i + 2].parse::<u8>(),
-                                        codes[i + 3].parse::<u8>(),
-                                        codes[i + 4].parse::<u8>(),
-                                    ) {
-                                        self.current_bg = Some(Color32::from_rgb(r, g, b));
-                                    }
-                                    i += 5; // Skip 48, 2, r, g, b
-                                } else {
-                                    i += 1;
-                                }
-                            }
-                            _ => {
-                                i += 1;
-                            }
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-                "39" => {
-                    // Default foreground color
-                    self.current_fg = None;
-                    i += 1;
-                }
-                "49" => {
-                    // Default background color
-                    self.current_bg = None;
-                    i += 1;
-                }
-                code => {
-                    // Handle 4-bit color codes
-                    if let Ok(color_code) = code.parse::<u8>() {
-                        match color_code {
-                            30..=37 => {
-                                let color_index = color_code - 30;
-                                self.current_fg =
-                                    Some(color_models::four_bit::ansi_color_to_egui(color_index));
-                            }
-                            40..=47 => {
-                                let color_index = color_code - 40;
-                                self.current_bg =
-                                    Some(color_models::four_bit::ansi_color_to_egui(color_index));
-                            }
-                            90..=97 => {
-                                let color_index = color_code - 90 + 8;
-                                self.current_fg =
-                                    Some(color_models::four_bit::ansi_color_to_egui(color_index));
-                            }
-                            100..=107 => {
-                                let color_index = color_code - 100 + 8;
-                                self.current_bg =
-                                    Some(color_models::four_bit::ansi_color_to_egui(color_index));
-                            }
-                            _ => {}
-                        }
-                    }
-                    i += 1;
-                }
-            }
-        }
+        let spans = ansi_to_spans(input);
+        egui_render::spans_to_colored_text(&spans, &EguiAnsiTheme::legacy())
     }
 }
 
-/// Converts a list of ColoredText to a list of RichText that can be displayed in egui
-///
-/// # Arguments
-/// - `colored_texts`: A list of text segments with color information
-///
-/// # Returns
-/// A list of RichText that can be displayed in egui
-pub fn convert_to_rich_text(colored_texts: &[ColoredText]) -> Vec<RichText> {
-    colored_texts
-        .iter()
-        .map(|colored_text| {
-            let mut rich_text = RichText::new(&colored_text.text);
-
-            if let Some(fg) = colored_text.foreground_color {
-                rich_text = rich_text.color(fg);
-            }
-
-            if let Some(bg) = colored_text.background_color {
-                rich_text = rich_text.background_color(bg);
-            }
-
-            rich_text
-        })
-        .collect()
-}
-
-/// Convenience function: directly converts text with ANSI escape sequences to a list of RichText
-///
-/// # Arguments
-/// - `input`: Text containing ANSI escape sequences
-///
-/// # Returns
-/// A list of RichText that can be displayed in egui
-pub fn ansi_to_rich_text(input: &str) -> Vec<RichText> {
-    // Directly parse input - don't preprocess escape sequences
-    // Only handle actual control characters for egui display compatibility
-    let mut parser = AnsiParser::new();
-    let colored_texts = parser.parse(input);
-    convert_to_rich_text(&colored_texts)
-}
-
-/// Creates an example function to demonstrate how to use this library
+/// Small compile-checked usage sample used by examples and documentation.
 pub fn example_usage() {
-    // 4-bit color example
-    let example_4bit =
-        "This is \x1b[31mred\x1b[0m, \x1b[34mblue\x1b[0m and \x1b[33myellow\x1b[0m text";
-    let _rich_text_4bit = ansi_to_rich_text(example_4bit);
-
-    // 8-bit color example
-    let example_8bit = "This is \x1b[38;5;208morange\x1b[0m, \x1b[38;5;51msky blue\x1b[0m and \x1b[38;5;120mgreen\x1b[0m text";
-    let _rich_text_8bit = ansi_to_rich_text(example_8bit);
-
-    // 24-bit color example
-    let example_24bit = "This is \x1b[38;2;255;105;180mhot pink\x1b[0m and \x1b[38;2;128;0;128mdeep purple\x1b[0m text";
-    let _rich_text_24bit = ansi_to_rich_text(example_24bit);
-
-    // Mixed example
-    let example_mixed = "Normal text \x1b[31mred\x1b[0m normal \x1b[38;5;208morange\x1b[0m normal \x1b[38;2;255;105;180mpink\x1b[0m normal";
-    let _rich_text_mixed = ansi_to_rich_text(example_mixed);
-
-    // Foreground and background color combination example
-    let example_fg_bg = "Default text \x1b[41;33mYellow on red\x1b[0m default text";
-    let _rich_text_fg_bg = ansi_to_rich_text(example_fg_bg);
-
-    // Use these RichText lists in an egui application
-    // ui.horizontal(|ui| {
-    //     for text in rich_text_4bit {
-    //         ui.label(text);
-    //     }
-    // });
+    let theme = EguiAnsiTheme::default();
+    let _job = ansi_to_layout_job("\x1b[38;5;208morange\x1b[0m", &theme);
+    let _rich_text = ansi_to_rich_text("\x1b[31mred\x1b[0m");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::{Color32, Stroke};
 
-    #[test]
-    fn test_4bit_color_parsing() {
-        let input = "\x1b[31mRed Text\x1b[0m";
-        let result = ansi_to_rich_text(input);
-        assert_eq!(result.len(), 1);
-        // Verify that the color is correct
-        assert_eq!(result[0].text(), "Red Text");
-        // Note: We don't verify the specific color value here as our implementation may not be perfectly consistent
+    fn text_of(spans: &[AnsiSpan]) -> String {
+        spans.iter().map(|span| span.text.as_str()).collect()
     }
 
     #[test]
-    fn test_8bit_color_parsing() {
-        let input = "\x1b[38;5;208mOrange Text\x1b[0m";
-        let result = ansi_to_rich_text(input);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text(), "Orange Text");
+    fn ansi_to_spans_parses_basic_4bit_color() {
+        let spans = ansi_to_spans("\x1b[31mRed\x1b[0m Default");
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].text, "Red");
+        assert_eq!(spans[0].style.foreground, AnsiColor::Indexed(1));
+        assert_eq!(spans[1].text, " Default");
+        assert_eq!(spans[1].style.foreground, AnsiColor::Default);
     }
 
     #[test]
-    fn test_24bit_color_parsing() {
-        let input = "\x1b[38;2;255;105;180mHot Pink Text\x1b[0m";
-        let result = ansi_to_rich_text(input);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text(), "Hot Pink Text");
+    fn ansi_to_spans_parses_8bit_and_24bit_colors() {
+        let spans = ansi_to_spans("\x1b[38;5;208mOrange\x1b[48;2;1;2;3mBg");
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].style.foreground, AnsiColor::Indexed(208));
+        assert_eq!(spans[1].style.foreground, AnsiColor::Indexed(208));
+        assert_eq!(spans[1].style.background, AnsiColor::Rgb(1, 2, 3));
     }
 
     #[test]
-    fn test_mixed_colors() {
-        let input =
-            "Normal text \x1b[31mred\x1b[0m normal text \x1b[38;5;208morange\x1b[0m normal text";
-        let result = ansi_to_rich_text(input);
-        assert_eq!(result.len(), 5); // Normal text + red + normal text + orange + normal text
-        assert_eq!(result[0].text(), "Normal text ");
-        assert_eq!(result[1].text(), "red");
-        assert_eq!(result[2].text(), " normal text ");
-        assert_eq!(result[3].text(), "orange");
-        assert_eq!(result[4].text(), " normal text");
+    fn ansi_to_spans_supports_colon_truecolor_forms() {
+        let spans = ansi_to_spans("\x1b[38:2::255:105:180mPink");
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].style.foreground, AnsiColor::Rgb(255, 105, 180));
     }
 
     #[test]
-    fn test_background_color() {
-        let input = "\x1b[41mWhite on red\x1b[0m";
-        let result = ansi_to_rich_text(input);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text(), "White on red");
+    fn ansi_to_spans_tracks_text_attributes() {
+        let spans = ansi_to_spans("\x1b[1;3;4:3;9mStyled\x1b[22;23;24;29mPlain");
+
+        assert_eq!(spans[0].style.intensity, AnsiIntensity::Bold);
+        assert!(spans[0].style.italic);
+        assert_eq!(spans[0].style.underline, UnderlineStyle::Curly);
+        assert!(spans[0].style.strikethrough);
+        assert_eq!(spans[1].style.intensity, AnsiIntensity::Normal);
+        assert!(!spans[1].style.italic);
+        assert_eq!(spans[1].style.underline, UnderlineStyle::None);
+        assert!(!spans[1].style.strikethrough);
     }
 
     #[test]
-    fn test_foreground_and_background_color() {
-        let input = "\x1b[31;43mYellow on red\x1b[0m";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+    fn stream_parser_keeps_style_across_chunks() {
+        let mut parser = AnsiStreamParser::new();
+        let first = parser.push_bytes(b"\x1b[31mRe");
+        let second = parser.push_bytes(b"d");
+        let third = parser.push_bytes(b"\x1b[0m Plain");
 
-        // There should be only one text segment with both foreground and background colors
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "Yellow on red");
-        assert!(colored_segments[0].foreground_color.is_some());
-        assert!(colored_segments[0].background_color.is_some());
+        assert_eq!(text_of(&first), "Re");
+        assert_eq!(first[0].style.foreground, AnsiColor::Indexed(1));
+        assert_eq!(text_of(&second), "d");
+        assert_eq!(second[0].style.foreground, AnsiColor::Indexed(1));
+        assert_eq!(text_of(&third), " Plain");
+        assert_eq!(third[0].style.foreground, AnsiColor::Default);
     }
 
     #[test]
-    fn test_sequential_color_changes() {
-        let input = "Default\x1b[31mRed\x1b[43mRed on yellow\x1b[32mGreen on yellow\x1b[0mDefault";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+    fn stream_parser_handles_split_escape_sequence() {
+        let mut parser = AnsiStreamParser::new();
 
-        // There should be 5 text segments: Default, Red, Red on yellow, Green on yellow, Default
-        assert_eq!(colored_segments.len(), 5);
-        assert_eq!(colored_segments[0].text, "Default");
-        assert_eq!(colored_segments[1].text, "Red");
-        assert_eq!(colored_segments[2].text, "Red on yellow");
-        assert_eq!(colored_segments[3].text, "Green on yellow");
-        assert_eq!(colored_segments[4].text, "Default");
+        assert!(parser.push_bytes(b"\x1b").is_empty());
+        assert!(parser.push_bytes(b"[38;5;").is_empty());
+        let spans = parser.push_bytes(b"208mOrange");
 
-        // Check colors
-        assert!(colored_segments[0].foreground_color.is_none());
-        assert!(colored_segments[0].background_color.is_none());
-
-        assert!(colored_segments[1].foreground_color.is_some());
-        assert!(colored_segments[1].background_color.is_none());
-
-        assert!(colored_segments[2].foreground_color.is_some());
-        assert!(colored_segments[2].background_color.is_some());
-
-        assert!(colored_segments[3].foreground_color.is_some());
-        assert!(colored_segments[3].background_color.is_some());
-
-        assert!(colored_segments[4].foreground_color.is_none());
-        assert!(colored_segments[4].background_color.is_none());
+        assert_eq!(text_of(&spans), "Orange");
+        assert_eq!(spans[0].style.foreground, AnsiColor::Indexed(208));
     }
 
     #[test]
-    fn test_escape_sequence_variations() {
-        // Test that escaped sequences (with double backslashes) are NOT processed
-        // Only actual control characters should be processed
-        let inputs = [
-            "\\x1b[31mRed\\x1b[0m",
-            "\\x1B[31mRed\\x1B[0m",
-            "\\X1b[31mRed\\X1b[0m",
-            "\\X1B[31mRed\\X1B[0m",
-            "\\033[31mRed\\033[0m",
-        ];
+    fn stream_parser_handles_split_utf8() {
+        let mut parser = AnsiStreamParser::new();
+        let bytes = "你".as_bytes();
 
-        for input in inputs {
-            let mut parser = AnsiParser::new();
-            let colored_segments = parser.parse(input);
+        assert!(parser.push_bytes(&bytes[..1]).is_empty());
+        assert!(parser.push_bytes(&bytes[1..2]).is_empty());
+        let spans = parser.push_bytes(&bytes[2..]);
 
-            // All should return the raw text unchanged (no ANSI processing)
-            assert_eq!(colored_segments.len(), 1);
-            assert_eq!(colored_segments[0].text, input);
-            assert!(colored_segments[0].foreground_color.is_none());
-            assert!(colored_segments[0].background_color.is_none());
-        }
+        assert_eq!(text_of(&spans), "你");
     }
 
     #[test]
-    fn test_mixed_escape_sequence_variations() {
-        // Test mixing different escape sequence representations in the same string
-        // These should NOT be processed since they are escaped sequences
-        let input = "\\x1b[31mRed\\033[32mGreen\\X1B[33mYellow\\x1B[0m";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+    fn stream_parser_drops_unfinished_escape_on_finish() {
+        let mut parser = AnsiStreamParser::new();
 
-        // Should have 1 segment: the entire text unchanged
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, input);
+        let spans = parser.push_bytes(b"Start\x1b[31");
+        let tail = parser.finish();
 
-        // Should have no colors
-        assert!(colored_segments[0].foreground_color.is_none());
-        assert!(colored_segments[0].background_color.is_none());
+        assert_eq!(text_of(&spans), "Start");
+        assert!(tail.is_empty());
+        assert_eq!(parser.current_style(), &AnsiStyle::default());
     }
 
     #[test]
-    fn test_ansi_to_rich_text_with_escape_variations() {
-        // Test the convenience function with escaped sequences - should NOT be processed
-        let inputs = [
-            "\\x1b[31mRed\\x1b[0m",
-            "\\x1B[31mRed\\x1B[0m",
-            "\\X1b[31mRed\\X1b[0m",
-            "\\X1B[31mRed\\X1B[0m",
-            "\\033[31mRed\\033[0m",
-        ];
+    fn span_buffer_merges_adjacent_same_style_chunks() {
+        let mut buffer = AnsiSpanBuffer::new();
 
-        for input in inputs {
-            let rich_text = ansi_to_rich_text(input);
-            assert_eq!(rich_text.len(), 1);
-            assert_eq!(rich_text[0].text(), input);
-            // Should not have any color processing
-        }
-    }
+        buffer.push_bytes(b"\x1b[32mHel");
+        buffer.push_bytes(b"lo");
 
-    // Additional comprehensive tests for edge cases and stability
-
-    #[test]
-    fn test_empty_input() {
-        let result = ansi_to_rich_text("");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text(), "");
+        assert_eq!(buffer.spans().len(), 1);
+        assert_eq!(buffer.spans()[0].text, "Hello");
+        assert_eq!(buffer.spans()[0].style.foreground, AnsiColor::Indexed(2));
     }
 
     #[test]
-    fn test_plain_text_no_escape() {
-        let input = "Hello, World!";
-        let result = ansi_to_rich_text(input);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text(), "Hello, World!");
+    fn layout_job_contains_expected_sections() {
+        let theme = EguiAnsiTheme::default();
+        let job = ansi_to_layout_job("A\x1b[31mRed\x1b[0mZ", &theme);
+
+        assert_eq!(job.text, "ARedZ");
+        assert_eq!(job.sections.len(), 3);
+        assert_eq!(job.sections[1].byte_range, 1..4);
+        assert_eq!(job.sections[1].format.color, theme.palette[1]);
     }
 
     #[test]
-    fn test_reset_foreground_color() {
-        let input = "\x1b[31mRed\x1b[39mDefault";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+    fn layout_job_maps_background_underline_and_strikethrough() {
+        let theme = EguiAnsiTheme::default();
+        let job = ansi_to_layout_job("\x1b[48;5;21;58;5;196;4;9mText", &theme);
+        let format = &job.sections[0].format;
 
-        assert_eq!(colored_segments.len(), 2);
-        assert_eq!(colored_segments[0].text, "Red");
-        assert!(colored_segments[0].foreground_color.is_some());
-        assert_eq!(colored_segments[1].text, "Default");
-        assert!(colored_segments[1].foreground_color.is_none());
-    }
-
-    #[test]
-    fn test_reset_background_color() {
-        let input = "\x1b[41mRed BG\x1b[49mDefault BG";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
-
-        assert_eq!(colored_segments.len(), 2);
-        assert_eq!(colored_segments[0].text, "Red BG");
-        assert!(colored_segments[0].background_color.is_some());
-        assert_eq!(colored_segments[1].text, "Default BG");
-        assert!(colored_segments[1].background_color.is_none());
-    }
-
-    #[test]
-    fn test_bright_foreground_colors() {
-        let input = "\x1b[90mBright Black\x1b[91mBright Red\x1b[97mBright White\x1b[0m";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
-
-        assert_eq!(colored_segments.len(), 3);
-        assert_eq!(colored_segments[0].text, "Bright Black");
-        assert!(colored_segments[0].foreground_color.is_some());
-        assert_eq!(colored_segments[1].text, "Bright Red");
-        assert!(colored_segments[1].foreground_color.is_some());
-        assert_eq!(colored_segments[2].text, "Bright White");
-        assert!(colored_segments[2].foreground_color.is_some());
-    }
-
-    #[test]
-    fn test_bright_background_colors() {
-        let input = "\x1b[100mBright Black BG\x1b[101mBright Red BG\x1b[107mBright White BG\x1b[0m";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
-
-        assert_eq!(colored_segments.len(), 3);
-        assert_eq!(colored_segments[0].text, "Bright Black BG");
-        assert!(colored_segments[0].background_color.is_some());
-        assert_eq!(colored_segments[1].text, "Bright Red BG");
-        assert!(colored_segments[1].background_color.is_some());
-        assert_eq!(colored_segments[2].text, "Bright White BG");
-        assert!(colored_segments[2].background_color.is_some());
-    }
-
-    #[test]
-    fn test_8bit_background_color() {
-        let input = "\x1b[48;5;196mRed BG\x1b[0m";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
-
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "Red BG");
-        assert!(colored_segments[0].background_color.is_some());
-    }
-
-    #[test]
-    fn test_24bit_foreground_color_value() {
-        let input = "\x1b[38;2;255;0;0mRed\x1b[0m";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
-
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "Red");
+        assert_eq!(format.background, theme.palette[21]);
         assert_eq!(
-            colored_segments[0].foreground_color,
-            Some(Color32::from_rgb(255, 0, 0))
+            format.underline,
+            Stroke::new(theme.underline_width, theme.palette[196])
+        );
+        assert_eq!(
+            format.strikethrough,
+            Stroke::new(theme.strikethrough_width, format.color)
         );
     }
 
     #[test]
-    fn test_24bit_background_color_value() {
-        let input = "\x1b[48;2;0;255;0mGreen BG\x1b[0m";
+    fn reverse_video_is_render_time_style() {
+        let spans = ansi_to_spans("\x1b[31;42;7mSwap");
+        let theme = EguiAnsiTheme::default();
+        let job = spans_to_layout_job(&spans, &theme);
+        let format = &job.sections[0].format;
+
+        assert_eq!(spans[0].style.foreground, AnsiColor::Indexed(1));
+        assert_eq!(spans[0].style.background, AnsiColor::Indexed(2));
+        assert_eq!(format.color, theme.palette[2]);
+        assert_eq!(format.background, theme.palette[1]);
+    }
+
+    #[test]
+    fn ansi_parser_compatibility_is_one_shot() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
 
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "Green BG");
-        assert_eq!(
-            colored_segments[0].background_color,
-            Some(Color32::from_rgb(0, 255, 0))
-        );
+        let red = parser.parse("\x1b[31mRed");
+        let plain = parser.parse("Plain");
+
+        assert_eq!(red[0].text, "Red");
+        assert_eq!(red[0].foreground_color, Some(Color32::RED));
+        assert_eq!(plain[0].text, "Plain");
+        assert_eq!(plain[0].foreground_color, None);
     }
 
     #[test]
-    fn test_256_color_boundary_values() {
-        // Test boundary values for 256-color mode (standard colors, RGB cube, grayscale)
-        let input = "\x1b[38;5;0mColor0\x1b[38;5;15mColor15\x1b[38;5;16mColor16\x1b[38;5;231mColor231\x1b[38;5;232mColor232\x1b[38;5;255mColor255\x1b[0m";
+    fn ansi_parser_compatibility_keeps_empty_input_segment() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let segments = parser.parse("");
 
-        assert_eq!(colored_segments.len(), 6);
-        for segment in &colored_segments {
-            assert!(segment.foreground_color.is_some());
-        }
+        assert_eq!(segments, vec![ColoredText::new("")]);
     }
 
     #[test]
-    fn test_consecutive_resets() {
-        let input = "\x1b[0m\x1b[0m\x1b[0mText\x1b[0m";
+    fn rich_text_compatibility_keeps_empty_input_segment() {
+        let rich_text = ansi_to_rich_text("");
+
+        assert_eq!(rich_text.len(), 1);
+        assert_eq!(rich_text[0].text(), "");
+    }
+
+    #[test]
+    fn non_sgr_sequences_are_stripped() {
+        let spans = ansi_to_spans("Before\x1b]0;Title\x07\x1b[2JAfter");
+
+        assert_eq!(text_of(&spans), "BeforeAfter");
+    }
+
+    #[test]
+    fn escaped_backslash_sequences_are_plain_text() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let input = "\\x1b[31mRed\\x1b[0m";
+        let segments = parser.parse(input);
 
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "Text");
-        assert!(colored_segments[0].foreground_color.is_none());
-        assert!(colored_segments[0].background_color.is_none());
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, input);
+        assert_eq!(segments[0].foreground_color, None);
     }
 
     #[test]
-    fn test_default_parser() {
-        let parser: AnsiParser = Default::default();
-        let mut parser = parser;
-        let result = parser.parse("\x1b[31mRed\x1b[0m");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text, "Red");
-    }
-
-    #[test]
-    fn test_colored_text_constructors() {
+    fn colored_text_constructors_work() {
         let plain = ColoredText::new("Hello");
-        assert_eq!(plain.text, "Hello");
-        assert!(plain.foreground_color.is_none());
-        assert!(plain.background_color.is_none());
-
         let fg = ColoredText::with_foreground("Hello", Color32::RED);
-        assert_eq!(fg.text, "Hello");
-        assert_eq!(fg.foreground_color, Some(Color32::RED));
-        assert!(fg.background_color.is_none());
-
         let bg = ColoredText::with_background("Hello", Color32::BLUE);
-        assert_eq!(bg.text, "Hello");
-        assert!(bg.foreground_color.is_none());
-        assert_eq!(bg.background_color, Some(Color32::BLUE));
-
         let both = ColoredText::with_colors("Hello", Some(Color32::RED), Some(Color32::BLUE));
-        assert_eq!(both.text, "Hello");
+
+        assert_eq!(plain.foreground_color, None);
+        assert_eq!(fg.foreground_color, Some(Color32::RED));
+        assert_eq!(bg.background_color, Some(Color32::BLUE));
         assert_eq!(both.foreground_color, Some(Color32::RED));
         assert_eq!(both.background_color, Some(Color32::BLUE));
     }
 
     #[test]
-    fn test_colored_text_equality() {
-        let a = ColoredText::new("Hello");
-        let b = ColoredText::new("Hello");
-        assert_eq!(a, b);
+    fn mixed_colors_keep_expected_text_segments() {
+        let result =
+            ansi_to_rich_text("Normal \x1b[31mred\x1b[0m normal \x1b[38;5;208morange\x1b[0m done");
 
-        let c = ColoredText::with_foreground("Hello", Color32::RED);
-        let d = ColoredText::with_foreground("Hello", Color32::RED);
-        assert_eq!(c, d);
-
-        let e = ColoredText::with_foreground("Hello", Color32::BLUE);
-        assert_ne!(c, e);
+        assert_eq!(result.len(), 5);
+        assert_eq!(result[0].text(), "Normal ");
+        assert_eq!(result[1].text(), "red");
+        assert_eq!(result[2].text(), " normal ");
+        assert_eq!(result[3].text(), "orange");
+        assert_eq!(result[4].text(), " done");
     }
 
     #[test]
-    fn test_multiline_text() {
-        let input = "\x1b[31mLine1\nLine2\x1b[0m";
+    fn background_color_is_preserved_in_legacy_parser() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let segments = parser.parse("\x1b[41mWhite on red\x1b[0m");
 
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "Line1\nLine2");
-        assert!(colored_segments[0].foreground_color.is_some());
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "White on red");
+        assert_eq!(segments[0].background_color, Some(Color32::RED));
     }
 
     #[test]
-    fn test_unicode_text() {
-        let input = "\x1b[31m你好世界🎉\x1b[0m";
+    fn foreground_and_background_color_are_preserved() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let segments = parser.parse("\x1b[31;43mRed on yellow\x1b[0m");
 
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "你好世界🎉");
-        assert!(colored_segments[0].foreground_color.is_some());
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].foreground_color, Some(Color32::RED));
+        assert_eq!(segments[0].background_color, Some(Color32::YELLOW));
     }
 
     #[test]
-    fn test_4bit_color_values() {
-        use color_models::four_bit::ansi_color_to_egui;
-
-        assert_eq!(ansi_color_to_egui(0), Color32::BLACK);
-        assert_eq!(ansi_color_to_egui(1), Color32::RED);
-        assert_eq!(ansi_color_to_egui(2), Color32::GREEN);
-        assert_eq!(ansi_color_to_egui(3), Color32::YELLOW);
-        assert_eq!(ansi_color_to_egui(4), Color32::BLUE);
-    }
-
-    #[test]
-    fn test_8bit_standard_colors() {
-        use color_models::eight_bit::ansi_256_to_egui;
-
-        assert_eq!(ansi_256_to_egui(0), Color32::BLACK);
-        assert_eq!(ansi_256_to_egui(1), Color32::RED);
-        assert_eq!(ansi_256_to_egui(15), Color32::WHITE);
-    }
-
-    #[test]
-    fn test_8bit_rgb_cube() {
-        use color_models::eight_bit::ansi_256_to_egui;
-
-        // 16 = (0,0,0) = black in RGB cube
-        assert_eq!(ansi_256_to_egui(16), Color32::from_rgb(0, 0, 0));
-        // 21 = (0,0,5) = pure blue
-        assert_eq!(ansi_256_to_egui(21), Color32::from_rgb(0, 0, 255));
-        // 196 = (5,0,0) = pure red
-        assert_eq!(ansi_256_to_egui(196), Color32::from_rgb(255, 0, 0));
-    }
-
-    #[test]
-    fn test_8bit_grayscale() {
-        use color_models::eight_bit::ansi_256_to_egui;
-
-        assert_eq!(ansi_256_to_egui(232), Color32::from_rgb(8, 8, 8));
-        assert_eq!(ansi_256_to_egui(255), Color32::from_rgb(248, 248, 248));
-    }
-
-    // Tests for empty parameter reset sequence
-    #[test]
-    fn test_empty_reset_sequence() {
-        // \x1b[m should be treated as \x1b[0m (reset)
-        let input = "\x1b[31mRed\x1b[mDefault";
+    fn sequential_color_changes_split_segments() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let segments = parser
+            .parse("Default\x1b[31mRed\x1b[43mRed on yellow\x1b[32mGreen on yellow\x1b[0mDefault");
 
-        assert_eq!(colored_segments.len(), 2);
-        assert_eq!(colored_segments[0].text, "Red");
-        assert!(colored_segments[0].foreground_color.is_some());
-        assert_eq!(colored_segments[1].text, "Default");
-        assert!(colored_segments[1].foreground_color.is_none());
+        let texts: Vec<_> = segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "Default",
+                "Red",
+                "Red on yellow",
+                "Green on yellow",
+                "Default"
+            ]
+        );
+        assert_eq!(segments[0].foreground_color, None);
+        assert_eq!(segments[1].foreground_color, Some(Color32::RED));
+        assert_eq!(segments[2].background_color, Some(Color32::YELLOW));
+        assert_eq!(segments[4].foreground_color, None);
     }
 
     #[test]
-    fn test_empty_reset_at_start() {
-        let input = "\x1b[mPlain text";
+    fn reset_foreground_color() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let segments = parser.parse("\x1b[31mRed\x1b[39mDefault");
 
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "Plain text");
-        assert!(colored_segments[0].foreground_color.is_none());
-    }
-
-    // Tests for Linux terminal prompt format
-    #[test]
-    fn test_linux_prompt_format() {
-        // Typical Linux prompt with colors: \x1b[1;31mroot\x1b[m@\x1b[1;34mhostname\x1b[m:#
-        let input = "\x1b[1;31mroot\x1b[m@\x1b[1;34mhost\x1b[m:#";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
-
-        // Should have: root, @, host, :#
-        assert!(!colored_segments.is_empty());
-        // Verify text is properly separated
-        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(combined, "root@host:#");
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].foreground_color, Some(Color32::RED));
+        assert_eq!(segments[1].foreground_color, None);
     }
 
     #[test]
-    fn test_bash_prompt_colors() {
-        // Test typical bash PS1 colors
-        let input = "\x1b[1;34muser@host\x1b[m:\x1b[1;32m~\x1b[m$ ";
+    fn reset_background_color() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let segments = parser.parse("\x1b[41mRed BG\x1b[49mDefault BG");
 
-        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(combined, "user@host:~$ ");
-    }
-
-    // Tests for non-SGR sequence stripping
-    #[test]
-    fn test_osc_sequence_stripped() {
-        // OSC sequence for setting window title: \x1b]0;Title\x07
-        let input = "Before\x1b]0;Window Title\x07After";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
-
-        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(combined, "BeforeAfter");
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].background_color, Some(Color32::RED));
+        assert_eq!(segments[1].background_color, None);
     }
 
     #[test]
-    fn test_osc_with_bel_terminator() {
-        let input = "\x1b]2;Title\x07Text";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+    fn bright_foreground_colors_are_indexed() {
+        let spans = ansi_to_spans("\x1b[90mBright Black\x1b[91mBright Red\x1b[97mBright White");
 
-        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(combined, "Text");
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].style.foreground, AnsiColor::Indexed(8));
+        assert_eq!(spans[1].style.foreground, AnsiColor::Indexed(9));
+        assert_eq!(spans[2].style.foreground, AnsiColor::Indexed(15));
     }
 
     #[test]
-    fn test_csi_cursor_movement_ignored() {
-        // Cursor movement sequences should be ignored but not appear in output
-        let input = "\x1b[2J\x1b[H\x1b[31mRed\x1b[0m";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+    fn bright_background_colors_are_indexed() {
+        let spans =
+            ansi_to_spans("\x1b[100mBright Black BG\x1b[101mBright Red BG\x1b[107mBright White BG");
 
-        assert_eq!(colored_segments.len(), 1);
-        assert_eq!(colored_segments[0].text, "Red");
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].style.background, AnsiColor::Indexed(8));
+        assert_eq!(spans[1].style.background, AnsiColor::Indexed(9));
+        assert_eq!(spans[2].style.background, AnsiColor::Indexed(15));
     }
 
     #[test]
-    fn test_complex_terminal_output() {
-        // Complex output with multiple sequences
-        let input = "\x1b[1;31mError:\x1b[m \x1b[33mFile not found\x1b[m\n\x1b[32mDone\x1b[m";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+    fn eight_bit_background_color() {
+        let spans = ansi_to_spans("\x1b[48;5;196mRed BG");
 
-        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
-        assert!(combined.contains("Error:"));
-        assert!(combined.contains("File not found"));
-        assert!(combined.contains("Done"));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].style.background, AnsiColor::Indexed(196));
     }
 
     #[test]
-    fn test_osc_without_terminator() {
-        // OSC sequence without proper terminator - should still be stripped
-        let input = "Start\x1b]0;No terminatorText";
+    fn truecolor_foreground_value() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let segments = parser.parse("\x1b[38;2;255;0;0mRed\x1b[0m");
 
-        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
-        // Should not contain the OSC sequence
-        assert!(!combined.contains("\x1b]"));
+        assert_eq!(
+            segments[0].foreground_color,
+            Some(Color32::from_rgb(255, 0, 0))
+        );
     }
 
     #[test]
-    fn test_reverse_video() {
-        // Test reverse video (swap foreground and background)
-        let input = "\x1b[31;42mRed on Green\x1b[7mSwapped\x1b[0m";
+    fn truecolor_background_value() {
         let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+        let segments = parser.parse("\x1b[48;2;0;255;0mGreen BG\x1b[0m");
 
-        assert_eq!(colored_segments.len(), 2);
-        assert_eq!(colored_segments[0].text, "Red on Green");
-        assert_eq!(colored_segments[1].text, "Swapped");
-        // After reverse, foreground should be previous background
-        assert!(colored_segments[1].foreground_color.is_some());
+        assert_eq!(
+            segments[0].background_color,
+            Some(Color32::from_rgb(0, 255, 0))
+        );
     }
 
     #[test]
-    fn test_text_attributes() {
-        // Test that text attributes (bold, underline) are handled gracefully
-        let input = "\x1b[1mBold\x1b[22m\x1b[4mUnderline\x1b[24mNormal";
-        let mut parser = AnsiParser::new();
-        let colored_segments = parser.parse(input);
+    fn indexed_color_boundary_values() {
+        let spans = ansi_to_spans(
+            "\x1b[38;5;0mA\x1b[38;5;15mB\x1b[38;5;16mC\x1b[38;5;231mD\x1b[38;5;232mE\x1b[38;5;255mF",
+        );
 
-        let combined: String = colored_segments.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(combined, "BoldUnderlineNormal");
+        assert_eq!(spans.len(), 6);
+        assert_eq!(spans[0].style.foreground, AnsiColor::Indexed(0));
+        assert_eq!(spans[5].style.foreground, AnsiColor::Indexed(255));
+    }
+
+    #[test]
+    fn consecutive_resets_are_harmless() {
+        let mut parser = AnsiParser::new();
+        let segments = parser.parse("\x1b[0m\x1b[0m\x1b[0mText\x1b[0m");
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0], ColoredText::new("Text"));
+    }
+
+    #[test]
+    fn default_parser_works() {
+        let mut parser: AnsiParser = Default::default();
+        let segments = parser.parse("\x1b[31mRed\x1b[0m");
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Red");
+    }
+
+    #[test]
+    fn multiline_text_keeps_newline() {
+        let mut parser = AnsiParser::new();
+        let segments = parser.parse("\x1b[31mLine1\nLine2\x1b[0m");
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "Line1\nLine2");
+    }
+
+    #[test]
+    fn unicode_text_is_preserved() {
+        let mut parser = AnsiParser::new();
+        let segments = parser.parse("\x1b[31m你好世界\x1b[0m");
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "你好世界");
+    }
+
+    #[test]
+    fn empty_reset_sequence_resets_style() {
+        let mut parser = AnsiParser::new();
+        let segments = parser.parse("\x1b[31mRed\x1b[mDefault");
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].foreground_color, Some(Color32::RED));
+        assert_eq!(segments[1].foreground_color, None);
+    }
+
+    #[test]
+    fn linux_prompt_format_is_linearized() {
+        let spans = ansi_to_spans("\x1b[1;31mroot\x1b[m@\x1b[1;34mhost\x1b[m:#");
+
+        assert_eq!(text_of(&spans), "root@host:#");
+    }
+
+    #[test]
+    fn bash_prompt_colors_are_linearized() {
+        let spans = ansi_to_spans("\x1b[1;34muser@host\x1b[m:\x1b[1;32m~\x1b[m$ ");
+
+        assert_eq!(text_of(&spans), "user@host:~$ ");
+    }
+
+    #[test]
+    fn cursor_movement_csi_is_ignored() {
+        let spans = ansi_to_spans("\x1b[2J\x1b[H\x1b[31mRed\x1b[0m");
+
+        assert_eq!(text_of(&spans), "Red");
+    }
+
+    #[test]
+    fn complex_terminal_output_keeps_visible_text() {
+        let spans = ansi_to_spans(
+            "\x1b[1;31mError:\x1b[m \x1b[33mFile not found\x1b[m\n\x1b[32mDone\x1b[m",
+        );
+
+        assert_eq!(text_of(&spans), "Error: File not found\nDone");
+    }
+
+    #[test]
+    fn text_attributes_reset_independently() {
+        let spans = ansi_to_spans("\x1b[1mBold\x1b[22m\x1b[4mUnderline\x1b[24mNormal");
+
+        assert_eq!(text_of(&spans), "BoldUnderlineNormal");
+        assert_eq!(spans[0].style.intensity, AnsiIntensity::Bold);
+        assert_eq!(spans[1].style.underline, UnderlineStyle::Single);
+        assert_eq!(spans[2].style.underline, UnderlineStyle::None);
+    }
+
+    #[test]
+    fn ansi_bytes_to_layout_job_matches_string_api() {
+        let theme = EguiAnsiTheme::default();
+        let input = "\x1b[38;5;208mOrange\x1b[0m";
+
+        assert_eq!(
+            ansi_bytes_to_layout_job(input.as_bytes(), &theme),
+            ansi_to_layout_job(input, &theme)
+        );
+    }
+
+    #[test]
+    fn invalid_utf8_is_replaced_without_panicking() {
+        let spans = ansi_bytes_to_spans(b"ok \xFF done");
+
+        assert_eq!(text_of(&spans), "ok \u{FFFD} done");
+    }
+
+    #[test]
+    fn unfinished_utf8_is_dropped_at_finish() {
+        let mut parser = AnsiStreamParser::new();
+
+        assert!(parser.push_bytes(&[0xE4]).is_empty());
+        assert!(parser.finish().is_empty());
+    }
+
+    #[test]
+    fn osc_st_sequence_is_stripped() {
+        let spans = ansi_to_spans("Before\x1b]0;Title\x1b\\After");
+
+        assert_eq!(text_of(&spans), "BeforeAfter");
+    }
+
+    #[test]
+    fn malformed_truecolor_is_ignored_without_style_leak() {
+        let spans = ansi_to_spans("\x1b[38;2;300;0;0mPlain");
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].text, "Plain");
+        assert_eq!(spans[0].style.foreground, AnsiColor::Default);
+    }
+
+    #[test]
+    fn underline_color_reset_keeps_underline_style() {
+        let spans = ansi_to_spans("\x1b[4;58;5;196mA\x1b[59mB");
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].style.underline, UnderlineStyle::Single);
+        assert_eq!(
+            spans[0].style.underline_color,
+            Some(AnsiColor::Indexed(196))
+        );
+        assert_eq!(spans[1].style.underline, UnderlineStyle::Single);
+        assert_eq!(spans[1].style.underline_color, None);
+    }
+
+    #[test]
+    fn reverse_reset_restores_normal_rendering() {
+        let spans = ansi_to_spans("\x1b[31;42;7mA\x1b[27mB");
+        let theme = EguiAnsiTheme::default();
+        let job = spans_to_layout_job(&spans, &theme);
+
+        assert_eq!(job.sections[0].format.color, theme.palette[2]);
+        assert_eq!(job.sections[0].format.background, theme.palette[1]);
+        assert_eq!(job.sections[1].format.color, theme.palette[1]);
+        assert_eq!(job.sections[1].format.background, theme.palette[2]);
+    }
+
+    #[test]
+    fn default_theme_renders_bold_low_colors_as_bright() {
+        let theme = EguiAnsiTheme::default();
+        let job = ansi_to_layout_job("\x1b[1;31mBold red", &theme);
+
+        assert_eq!(job.sections[0].format.color, theme.palette[9]);
+    }
+
+    #[test]
+    fn legacy_theme_does_not_brighten_bold_low_colors() {
+        let theme = EguiAnsiTheme::legacy();
+        let job = ansi_to_layout_job("\x1b[1;31mBold red", &theme);
+
+        assert_eq!(job.sections[0].format.color, theme.palette[1]);
+    }
+
+    #[test]
+    fn span_buffer_clear_resets_spans_and_parser_state() {
+        let mut buffer = AnsiSpanBuffer::new();
+
+        buffer.push_bytes(b"\x1b[31mRed");
+        buffer.clear();
+        buffer.push_bytes(b"Plain");
+
+        assert_eq!(buffer.spans().len(), 1);
+        assert_eq!(buffer.spans()[0].text, "Plain");
+        assert_eq!(buffer.spans()[0].style.foreground, AnsiColor::Default);
     }
 }

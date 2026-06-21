@@ -1,151 +1,121 @@
 # egui_sgr
 
-## Overview
+`egui_sgr` converts ANSI/SGR escape sequences into egui text. The main output is
+`egui::text::LayoutJob`, which is the egui representation designed for one text
+value with multiple styled sections.
 
-egui_sgr is a Rust library that converts ASCII/ANSI escape sequence color models into colored text in egui. It provides a complete parsing system that can handle all three ANSI color models and intelligently manages foreground and background color states.
+## Install
 
-## Architectural Design
-
-### Core Components
-
-1.  **AnsiParser** (src/lib.rs)
-    *   **Responsibility**: Parses ANSI escape sequences and manages color states.
-    *   **State Management**: Uses `current_fg` and `current_bg` to cache the current colors.
-    *   **Regular Expression**: `\x1b\[([0-9;]+)m([^\x1b]*)` matches ANSI sequences.
-    *   **Key Methods**:
-        *   `parse(&mut self, input: &str) -> Vec<ColoredText>`
-        *   `process_ansi_sequence(&mut self, sequence: &str)`
-
-2.  **ColoredText Struct**
-    *   Represents a text segment with color information.
-    *   **Fields**: `text` (String), `foreground_color` (Option<Color32>), `background_color` (Option<Color32>).
-
-3.  **Color Model Modules** (src/color_models/)
-    *   Each module is responsible for the conversion logic of one color model.
-    *   Provides a unified interface function: `parse_*_color`.
-
-### Color Model Implementation
-
-#### 4-bit Color Model (four_bit.rs)
-*   **Handling Range**: 30-37, 40-47, 90-97, 100-107.
-*   **Color Mapping**: A predefined array of 16 colors.
-*   **Core Function**: `ansi_color_to_egui(color_code: u8) -> Color32`.
-*   **Formula**: Converts ANSI codes to an index from 0 to 15.
-
-#### 8-bit Color Model (eight_bit.rs)
-*   **Handling Range**: 0-255.
-*   **Segments**:
-    *   0-15: Standard 16 colors.
-    *   16-231: 6×6×6 RGB cube.
-    *   232-255: 24 levels of grayscale.
-*   **RGB Cube Calculation Formula**:
-    ```
-    code = color_code - 16
-    r = code / 36
-    g = (code % 36) / 6
-    b = code % 6
-    color_component = if c == 0 { 0 } else { 55 + c * 40 } 
-    // Simplified, original has different values for c == 5
-    ```
-*   **Core Function**: `ansi_256_to_egui(color_code: u8) -> Color32`.
-
-#### 24-bit True Color Model (twenty_four_bit.rs)
-*   **Handling Format**: `38;2;<r>;<g>;<b>` (foreground) and `48;2;<r>;<g>;<b>` (background).
-*   **RGB Range**: 0-255.
-*   **Core Function**: `rgb_to_egui(r: u8, g: u8, b: u8) -> Color32`.
-
-## API Design
-
-### Public Interface
-
-1.  **Convenience Function**
-    ```rust
-    pub fn ansi_to_rich_text(input: &str) -> Vec<RichText>
-    ```
-
-2.  **Advanced Interface**
-    ```rust
-    pub fn convert_to_rich_text(colored_texts: &[ColoredText]) -> Vec<RichText>
-    ```
-
-3.  **Parser Interface**
-    ```rust
-    let mut parser = AnsiParser::new();
-    let colored_segments = parser.parse(input);
-    ```
-
-### Usage Patterns
-
-1.  **Basic Usage**
-    *   Single color: `\x1b[31mRed\x1b[0m`
-    *   256 colors: `\x1b[38;5;208mOrange\x1b[0m`
-    *   True color: `\x1b[38;2;255;105;180mPink\x1b[0m`
-
-2.  **Combined Usage**
-    *   Foreground + Background: `\x1b[31;43mRed text on yellow background\x1b[0m`
-    *   Sequence changes: `\x1b[31mRed\x1b[43mRed text on yellow\x1b[32mGreen text on yellow\x1b[0m`
-
-## Color State Management
-
-### State Transition Rules
-
-1.  **Reset**: `\x1b[0m` resets all color states.
-2.  **Foreground**: `\x1b[38;...m` sets the foreground color.
-3.  **Background**: `\x1b[48;...m` sets the background color.
-4.  **Reset Foreground**: `\x1b[39m` resets the foreground color.
-5.  **Reset Background**: `\x1b[49m` resets the background color.
-
-### State Caching Algorithm
-
-```
-current_state = {fg: None, bg: None}
-For each ANSI sequence:
-  1. Parse the codes in the sequence.
-  2. Update the current state.
-  3. Apply the current state to the subsequent text.
+```toml
+[dependencies]
+egui_sgr = "0.2"
 ```
 
-## Testing Strategy
+## LayoutJob Usage
 
-### Unit Tests
+```rust
+use egui_sgr::{ansi_to_layout_job, EguiAnsiTheme};
 
-1.  **Color Model Tests**
-    *   Verify the correctness of color conversion formulas.
-    *   Boundary value testing.
-    *   Special value testing.
+let theme = EguiAnsiTheme::default();
+let job = ansi_to_layout_job(
+    "normal \x1b[31mred\x1b[0m \x1b[38;5;208morange\x1b[0m",
+    &theme,
+);
 
-2.  **Parser Tests**
-    *   Parsing of single color sequences.
-    *   Parsing of composite color sequences.
-    *   State caching tests.
-    *   Reset sequence tests.
+ui.label(job);
+```
 
-### Test Coverage
+`LayoutJob` is preferred over `RichText` because ANSI commonly changes style
+inside a single logical string. `RichText` applies style to a whole string, so
+it remains available only for compatibility and simple segmented rendering.
 
-*   4-bit color: 4 tests
-*   8-bit color: 2 tests
-*   24-bit color: 2 tests
-*   Integration tests: 5 tests
-*   **Total**: 13 tests
+## Streaming Usage
 
-## Performance Considerations
+```rust
+use egui_sgr::{AnsiSpanBuffer, EguiAnsiTheme};
 
-1.  **Regex Pre-compilation**: Avoids repeated compilation overhead.
-2.  **State Caching**: Reduces the number of color lookups.
-3.  **Memory Efficiency**: Uses `Option` to avoid unnecessary color allocations.
+let mut buffer = AnsiSpanBuffer::new();
+buffer.push_bytes(b"\x1b[32mstream ");
+buffer.push_bytes(b"keeps green");
+buffer.push_bytes(b"\x1b[0m done");
+buffer.finish();
 
-## Dependencies
+let theme = EguiAnsiTheme::default();
+ui.label(buffer.to_layout_job(&theme));
+```
 
-*   `egui`: Provides `Color32` and `RichText` types.
-*   `regex`: Provides regular expression matching functionality.
+For lower-level control, use `AnsiStreamParser` directly:
 
-## Example Application
+```rust
+use egui_sgr::AnsiStreamParser;
 
-`examples/demo.rs` demonstrates the full functionality of the library, including:
-*   Independent usage of the three color models.
-*   Color combination and sequence processing.
-*   Interactive color demonstration.
+let mut parser = AnsiStreamParser::new();
+let spans = parser.push_bytes(b"\x1b[31mred");
+let tail = parser.finish();
+```
+
+The streaming API is synchronous and byte-oriented, so it can be connected to
+`std::io`, process output, PTYs, async runtimes, or network streams by feeding
+whatever chunks the caller receives.
+
+## API Layers
+
+- `ansi_to_spans` / `ansi_bytes_to_spans`: parse ANSI into semantic spans.
+- `spans_to_layout_job`: render already parsed spans with an egui theme.
+- `ansi_to_layout_job` / `ansi_bytes_to_layout_job`: one-call parse and render.
+- `AnsiStreamParser`: incremental parser that preserves state across chunks.
+- `AnsiSpanBuffer`: accumulates streamed spans and renders the full buffer.
+- `ansi_to_rich_text`, `convert_to_rich_text`, `AnsiParser`: compatibility APIs.
+
+For the full module design and compatibility policy, see
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Supported SGR
+
+- Reset: `0`, empty `CSI m`.
+- 4-bit colors: `30..37`, `40..47`, `90..97`, `100..107`.
+- Defaults: `39`, `49`, `59`.
+- 8-bit colors: `38;5;n`, `48;5;n`, `58;5;n`.
+- 24-bit colors: `38;2;r;g;b`, `48;2;r;g;b`, `58;2;r;g;b`.
+- Colon forms: `38:2::r:g:b`, `38:2:r:g:b`, `38:5:n`, and related forms.
+- Attributes: bold, faint, italic, underline, strikethrough, reverse, hidden.
+
+This crate does not emulate a terminal screen. Cursor movement, clearing,
+DCS, and OSC sequences are stripped by default.
+
+## Themes
+
+`EguiAnsiTheme::default()` uses a conventional xterm 256-color palette.
+`EguiAnsiTheme::legacy()` preserves the previous 0.1.x palette as closely as
+possible for the old `RichText` and `ColoredText` APIs.
 
 ## Demo
 
+Run the egui demo with:
+
+```sh
+cargo run --example demo
+```
+
 ![Demo](demo.png)
+
+## Benchmarks And Quality Gates
+
+Parser, renderer, and streaming paths have Criterion benchmarks:
+
+```sh
+cargo bench --bench ansi
+```
+
+The release quality gate used by CI is:
+
+```sh
+cargo fmt -- --check
+cargo check --all-targets
+cargo test --all-targets
+cargo test --doc
+cargo clippy --all-targets --all-features -- -D warnings
+cargo bench --bench ansi --no-run
+cargo doc --no-deps --all-features
+cargo package --allow-dirty
+```

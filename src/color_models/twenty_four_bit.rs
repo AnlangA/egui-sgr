@@ -1,15 +1,10 @@
+//! 24-bit ANSI true-color conversion helpers.
+
 use egui::{Color32, RichText};
-use regex::Regex;
-use std::sync::LazyLock;
 
 // 24-bit true color processing module
 // Supports the true color mode in ANSI escape sequences
 // Can directly specify RGB values, theoretically displaying 16.77 million colors
-
-// Pre-compiled regex for matching 24-bit true color sequences (cached for performance)
-static TWENTY_FOUR_BIT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^2;(\d+);(\d+);(\d+)$").expect("Invalid 24-bit color regex pattern")
-});
 
 /// Converts RGB values to an egui color
 ///
@@ -46,25 +41,22 @@ pub fn apply_background_color(text: &str, r: u8, g: u8, b: u8) -> RichText {
 /// # Returns
 /// RichText with the color applied
 pub fn parse_24bit_color(text: &str, sequence: &str, is_background: bool) -> Option<RichText> {
-    // Use pre-compiled regex for matching 24-bit true color sequences
-    let caps = TWENTY_FOUR_BIT_REGEX.captures(sequence)?;
-    let r_str = caps.get(1)?.as_str();
-    let g_str = caps.get(2)?.as_str();
-    let b_str = caps.get(3)?.as_str();
-
-    if let (Ok(r), Ok(g), Ok(b)) = (
-        r_str.parse::<u8>(),
-        g_str.parse::<u8>(),
-        b_str.parse::<u8>(),
-    ) {
-        Some(if is_background {
-            apply_background_color(text, r, g, b)
-        } else {
-            apply_foreground_color(text, r, g, b)
-        })
-    } else {
-        None
+    let mut parts = sequence.split(';');
+    if parts.next()? != "2" {
+        return None;
     }
+    let r = parts.next()?.parse::<u8>().ok()?;
+    let g = parts.next()?.parse::<u8>().ok()?;
+    let b = parts.next()?.parse::<u8>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some(if is_background {
+        apply_background_color(text, r, g, b)
+    } else {
+        apply_foreground_color(text, r, g, b)
+    })
 }
 
 #[cfg(test)]

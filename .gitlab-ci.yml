@@ -1,7 +1,11 @@
 stages:
     - fmt
     - compile
+    - lint
     - unit test
+    - bench
+    - docs
+    - package
     - build examples
     - release
 
@@ -30,6 +34,13 @@ rust-compile-check:
     script:
         - cargo check --all-targets --all-features
 
+rust-clippy-check:
+    stage: lint
+    image: rust-compiler:1.0
+    script:
+        - rustup component add clippy
+        - cargo clippy --all-targets --all-features -- -D warnings
+
 # ----------------------------------------------------------------------
 # 4. 单元测试
 # ----------------------------------------------------------------------
@@ -39,6 +50,24 @@ rust-unit-test:
     script:
         - cargo test --all-targets --verbose
 
+rust-bench-check:
+    stage: bench
+    image: rust-compiler:1.0
+    script:
+        - cargo bench --bench ansi --no-run
+
+rust-doc-check:
+    stage: docs
+    image: rust-compiler:1.0
+    script:
+        - cargo doc --no-deps --all-features
+
+rust-package-check:
+    stage: package
+    image: rust-compiler:1.0
+    script:
+        - cargo package --allow-dirty --no-verify
+
 # ----------------------------------------------------------------------
 # 5. 构建示例程序
 # ----------------------------------------------------------------------
@@ -46,8 +75,6 @@ build-example:
     stage: build examples
     image: rust-compiler:1.0
     script:
-        # 安装eframe依赖
-        - cargo add eframe --dev
         # 构建示例程序
         - cargo build --example demo --release
         # 为示例程序创建可执行文件名
@@ -70,8 +97,6 @@ build-linux-musl:
         - rustup target add x86_64-unknown-linux-musl
         - apt-get update && apt-get install -y musl-tools
     script:
-        # 安装eframe依赖
-        - cargo add eframe --dev
         # 构建示例程序（静态链接）
         - cargo build --example demo --release --target x86_64-unknown-linux-musl
         # 为示例程序创建可执行文件名
@@ -94,8 +119,6 @@ build-windows:
         - rustup target add x86_64-pc-windows-gnu
         - apt-get update && apt-get install -y mingw-w64
     script:
-        # 安装eframe依赖
-        - cargo add eframe --dev
         # 构建示例程序（Windows）
         - cargo build --example demo --release --target x86_64-pc-windows-gnu
         # 为示例程序创建可执行文件名
@@ -135,21 +158,15 @@ create-gitlab-release:
             - 支持8位色（256色）模型
             - 支持24位真彩色模型
             - 自动检测和转换混合颜色序列
-            - 支持前景色和背景色同时设置
-            - 智能缓存和应用当前颜色状态
+            - 支持前景色、背景色、下划线颜色和文本属性
+            - 支持 LayoutJob 输出和 stream 输入
 
             ### 使用示例
             ```rust
-            use egui_sgr::ansi_to_rich_text;
+            use egui_sgr::{ansi_to_layout_job, EguiAnsiTheme};
 
-            // 4位色（16色）
-            let red_text = ansi_to_rich_text("\x1b[31m红色文本\x1b[0m");
-
-            // 8位色（256色）
-            let orange_text = ansi_to_rich_text("\x1b[38;5;208m橙色文本\x1b[0m");
-
-            // 24位真彩色
-            let pink_text = ansi_to_rich_text("\x1b[38;2;255;105;180m粉色文本\x1b[0m");
+            let theme = EguiAnsiTheme::default();
+            let job = ansi_to_layout_job("\x1b[31m红色文本\x1b[0m", &theme);
             ```
         assets:
             links:

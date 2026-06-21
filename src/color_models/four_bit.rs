@@ -1,14 +1,9 @@
+//! 4-bit ANSI color conversion helpers.
+
 use egui::{Color32, RichText};
-use regex::Regex;
-use std::sync::LazyLock;
 
 // 4-bit color (16 colors) processing module
 // Supports the standard 16-color mode in ANSI escape sequences
-
-// Pre-compiled regex for matching 4-bit color sequences (cached for performance)
-static FOUR_BIT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^([34][0-7]|9[0-7]|10[0-7])$").expect("Invalid 4-bit color regex pattern")
-});
 
 // Standard color mapping
 const COLORS: [Color32; 16] = [
@@ -64,23 +59,13 @@ pub fn apply_background_color(text: &str, color_code: u8) -> RichText {
 /// # Returns
 /// RichText with the color applied
 pub fn parse_4bit_color(text: &str, sequence: &str, is_background: bool) -> Option<RichText> {
-    // Use pre-compiled regex for matching 4-bit color sequences
-    if !FOUR_BIT_REGEX.is_match(sequence) {
-        return None;
-    }
-
-    // Extract the color code
-    let color_code = if let Ok(code) = sequence.parse::<u8>() {
-        // Convert ANSI code to an index from 0-15
-        match code {
-            30..=37 => code - 30,        // Standard foreground color
-            40..=47 => code - 40,        // Standard background color
-            90..=97 => code - 90 + 8,    // Bright foreground color
-            100..=107 => code - 100 + 8, // Bright background color
-            _ => return None,
-        }
-    } else {
-        return None;
+    let code = sequence.parse::<u8>().ok()?;
+    let color_code = match code {
+        30..=37 => code - 30,        // Standard foreground color
+        40..=47 => code - 40,        // Standard background color
+        90..=97 => code - 90 + 8,    // Bright foreground color
+        100..=107 => code - 100 + 8, // Bright background color
+        _ => return None,
     };
 
     Some(if is_background {

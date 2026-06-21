@@ -1,7 +1,8 @@
 [package]
 name = "egui_sgr"
-version = "0.1.5"
+version = "0.2.1"
 edition = "2024"
+rust-version = "1.92"
 description = "A Rust library that converts ASCII/ANSI escape sequence color models into colored text in egui"
 license = "MIT"
 repository = "https://github.com/AnlangA/egui-sgr"
@@ -12,12 +13,17 @@ keywords = ["egui", "ansi", "color", "terminal", "parsing"]
 categories = ["gui", "text-processing"]
 
 [dependencies]
-egui = "0.33.2"
-regex = "1.12.2"
+egui = "0.34.3"
+vte = "0.15.0"
 
 [dev-dependencies]
-eframe = "0.33.2"
+criterion = "0.8.2"
+eframe = "0.34.3"
 
 [[example]]
 name = "demo"
 path = "examples/demo.rs"
+
+[[bench]]
+name = "ansi"
+harness = false
