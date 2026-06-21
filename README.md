@@ -91,6 +91,13 @@ possible for the old `RichText` and `ColoredText` APIs.
 
 ## Demo
 
+Run the minimal API examples with:
+
+```sh
+cargo run --example layout_job
+cargo run --example streaming
+```
+
 Run the egui demo with:
 
 ```sh
