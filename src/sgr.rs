@@ -1,17 +1,11 @@
 use crate::{AnsiColor, AnsiIntensity, AnsiStyle, UnderlineStyle};
 use vte::Params;
 
+const MAX_SGR_PARAMS: usize = 32;
+const EMPTY_PARAM: &[u16] = &[];
+
 pub(crate) fn apply_sgr(params: &Params, style: &mut AnsiStyle) {
-    let params: Vec<Vec<u16>> = params
-        .iter()
-        .map(|param| {
-            if param.is_empty() {
-                vec![0]
-            } else {
-                param.to_vec()
-            }
-        })
-        .collect();
+    let params = SgrParams::new(params);
 
     if params.is_empty() {
         style.reset();
@@ -20,7 +14,7 @@ pub(crate) fn apply_sgr(params: &Params, style: &mut AnsiStyle) {
 
     let mut i = 0;
     while i < params.len() {
-        let param = &params[i];
+        let param = params.get(i);
         let code = param.first().copied().unwrap_or(0);
 
         if param.len() > 1 {
@@ -81,25 +75,20 @@ fn apply_simple_sgr(style: &mut AnsiStyle, code: u16) {
 }
 
 fn apply_semicolon_extended_color(
-    params: &[Vec<u16>],
+    params: &SgrParams<'_>,
     index: usize,
     style: &mut AnsiStyle,
     target: u16,
 ) -> usize {
-    let Some(mode) = params
-        .get(index + 1)
-        .and_then(|param| param.first())
-        .copied()
-    else {
+    let Some(mode) = params.first(index + 1) else {
         return 1;
     };
 
     match mode {
         5 => {
             if let Some(color_code) = params
-                .get(index + 2)
-                .and_then(|param| param.first())
-                .and_then(|value| u8::try_from(*value).ok())
+                .first(index + 2)
+                .and_then(|value| u8::try_from(value).ok())
             {
                 apply_extended_color(style, target, AnsiColor::Indexed(color_code));
                 3
@@ -109,18 +98,9 @@ fn apply_semicolon_extended_color(
         }
         2 => {
             let rgb = [
-                params
-                    .get(index + 2)
-                    .and_then(|param| param.first())
-                    .copied(),
-                params
-                    .get(index + 3)
-                    .and_then(|param| param.first())
-                    .copied(),
-                params
-                    .get(index + 4)
-                    .and_then(|param| param.first())
-                    .copied(),
+                params.first(index + 2),
+                params.first(index + 3),
+                params.first(index + 4),
             ];
 
             if let [Some(r), Some(g), Some(b)] = rgb
@@ -133,6 +113,41 @@ fn apply_semicolon_extended_color(
             1
         }
         _ => 1,
+    }
+}
+
+struct SgrParams<'a> {
+    groups: [&'a [u16]; MAX_SGR_PARAMS],
+    len: usize,
+}
+
+impl<'a> SgrParams<'a> {
+    fn new(params: &'a Params) -> Self {
+        let mut groups = [EMPTY_PARAM; MAX_SGR_PARAMS];
+        let mut len = 0;
+
+        for param in params {
+            groups[len] = if param.is_empty() { EMPTY_PARAM } else { param };
+            len += 1;
+        }
+
+        Self { groups, len }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn get(&self, index: usize) -> &'a [u16] {
+        self.groups.get(index).copied().unwrap_or(EMPTY_PARAM)
+    }
+
+    fn first(&self, index: usize) -> Option<u16> {
+        self.get(index).first().copied()
     }
 }
 

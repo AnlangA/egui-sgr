@@ -1,8 +1,11 @@
+#[cfg(feature = "legacy")]
 use egui::Color32;
 use egui_sgr::{
-    AnsiColor, AnsiParser, AnsiSpanBuffer, AnsiStreamParser, EguiAnsiTheme, ansi_to_layout_job,
-    ansi_to_rich_text, ansi_to_spans, spans_to_layout_job,
+    AnsiColor, AnsiSpanBuffer, AnsiStreamParser, EguiAnsiTheme, ansi_to_layout_job, ansi_to_spans,
+    spans_to_layout_job,
 };
+#[cfg(feature = "legacy")]
+use egui_sgr::{AnsiParser, ansi_to_rich_text};
 
 #[test]
 fn public_layout_job_flow() {
@@ -45,6 +48,7 @@ fn public_span_buffer_flow() {
 }
 
 #[test]
+#[cfg(feature = "legacy")]
 fn public_legacy_flow() {
     let mut parser = AnsiParser::new();
     let segments = parser.parse("\x1b[31mred\x1b[0m");

@@ -1,3 +1,4 @@
+#[cfg(feature = "legacy")]
 use egui::Color32;
 
 /// ANSI color representation before it is mapped into an egui color.
@@ -92,6 +93,7 @@ impl AnsiSpan {
 }
 
 /// Legacy text segment with only foreground/background egui colors.
+#[cfg(feature = "legacy")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColoredText {
     /// The text content of this segment.
@@ -102,6 +104,7 @@ pub struct ColoredText {
     pub background_color: Option<Color32>,
 }
 
+#[cfg(feature = "legacy")]
 impl ColoredText {
     /// Creates a segment with no colors applied.
     #[must_use]

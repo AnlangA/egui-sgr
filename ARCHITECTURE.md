@@ -18,14 +18,15 @@ sequences, and maps the result into egui types.
 - `spans_to_layout_job` is the egui render layer. It turns semantic spans into
   one `egui::text::LayoutJob`, preserving byte ranges and text layout as a
   single egui widget.
-- `ansi_to_layout_job` and `ansi_bytes_to_layout_job` are convenience APIs that
-  compose parse and render in one call.
+- `ansi_to_layout_job` and `ansi_bytes_to_layout_job` are direct render APIs
+  that parse into a `LayoutJob` without allocating an intermediate span list.
 - `AnsiStreamParser` is the synchronous streaming parser. It preserves style,
   incomplete escape sequences, and incomplete UTF-8 between chunks.
 - `AnsiSpanBuffer` accumulates streaming output and can render the accumulated
   spans to a `LayoutJob`.
 - `AnsiParser`, `ColoredText`, and `ansi_to_rich_text` are compatibility APIs
-  for existing users and simple segmented rendering.
+  behind the `legacy` feature for existing users and simple segmented
+  rendering.
 
 ## Module Responsibilities
 
@@ -71,16 +72,20 @@ Performance-sensitive paths are covered by Criterion benchmarks:
 cargo bench --bench ansi
 ```
 
-The benchmark suite covers one-shot parsing, one-shot `LayoutJob` rendering,
-chunked streaming parse, and chunked streaming buffer rendering.
+The benchmark suite covers one-shot parsing, direct `LayoutJob` rendering,
+parse-then-render comparison, SGR-dense inputs, truecolor-heavy inputs, long
+plain text, chunked streaming parse, and chunked streaming buffer rendering.
 
 ## Compatibility Policy
 
-The 0.2 API is additive over the 0.1 compatibility surface:
+The 0.3 API intentionally narrows the default public surface:
 
-- Existing `AnsiParser::parse(&str) -> Vec<ColoredText>` remains one-shot and
-  resets style state for every call.
-- Existing `ansi_to_rich_text` remains available and uses the legacy palette.
+- The default API focuses on `AnsiSpan`, `AnsiStreamParser`, `AnsiSpanBuffer`,
+  and `LayoutJob` rendering.
+- `AnsiParser::parse(&str) -> Vec<ColoredText>` remains one-shot and resets
+  style state for every call when the `legacy` feature is enabled.
+- `ansi_to_rich_text` remains available with the `legacy` feature and uses the
+  legacy palette.
 - New code should prefer `LayoutJob` APIs for egui rendering.
 
 ## Quality Gates
@@ -90,8 +95,10 @@ Before publishing, run:
 ```sh
 cargo fmt -- --check
 cargo check --all-targets
+cargo check --all-targets --all-features
 cargo test --all-targets
-cargo test --doc
+cargo test --all-targets --all-features
+cargo test --doc --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 cargo bench --bench ansi --no-run
 cargo doc --no-deps --all-features

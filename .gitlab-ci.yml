@@ -32,6 +32,7 @@ rust-compile-check:
     stage: compile
     image: rust-compiler:1.0
     script:
+        - cargo check --all-targets
         - cargo check --all-targets --all-features
 
 rust-clippy-check:
@@ -49,6 +50,8 @@ rust-unit-test:
     image: rust-compiler:1.0
     script:
         - cargo test --all-targets --verbose
+        - cargo test --all-targets --all-features --verbose
+        - cargo test --doc --all-features --verbose
 
 rust-bench-check:
     stage: bench
@@ -66,7 +69,7 @@ rust-package-check:
     stage: package
     image: rust-compiler:1.0
     script:
-        - cargo package --allow-dirty --no-verify
+        - cargo package --allow-dirty
 
 # ----------------------------------------------------------------------
 # 5. 构建示例程序

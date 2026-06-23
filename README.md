@@ -8,7 +8,15 @@ value with multiple styled sections.
 
 ```toml
 [dependencies]
-egui_sgr = "0.2"
+egui_sgr = "0.3"
+```
+
+For the legacy `RichText`, `ColoredText`, `AnsiParser`, and color helper APIs,
+enable the optional compatibility feature:
+
+```toml
+[dependencies]
+egui_sgr = { version = "0.3", features = ["legacy"] }
 ```
 
 ## LayoutJob Usage
@@ -65,7 +73,8 @@ whatever chunks the caller receives.
 - `ansi_to_layout_job` / `ansi_bytes_to_layout_job`: one-call parse and render.
 - `AnsiStreamParser`: incremental parser that preserves state across chunks.
 - `AnsiSpanBuffer`: accumulates streamed spans and renders the full buffer.
-- `ansi_to_rich_text`, `convert_to_rich_text`, `AnsiParser`: compatibility APIs.
+- `ansi_to_rich_text`, `convert_to_rich_text`, `AnsiParser`: compatibility APIs
+  behind the `legacy` feature.
 
 For the full module design and compatibility policy, see
 [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -87,7 +96,8 @@ DCS, and OSC sequences are stripped by default.
 
 `EguiAnsiTheme::default()` uses a conventional xterm 256-color palette.
 `EguiAnsiTheme::legacy()` preserves the previous 0.1.x palette as closely as
-possible for the old `RichText` and `ColoredText` APIs.
+possible. The old `RichText` and `ColoredText` APIs are available with the
+`legacy` feature.
 
 ## Demo
 
@@ -119,8 +129,10 @@ The release quality gate used by CI is:
 ```sh
 cargo fmt -- --check
 cargo check --all-targets
+cargo check --all-targets --all-features
 cargo test --all-targets
-cargo test --doc
+cargo test --all-targets --all-features
+cargo test --doc --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 cargo bench --bench ansi --no-run
 cargo doc --no-deps --all-features

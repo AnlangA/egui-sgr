@@ -134,8 +134,9 @@ pub fn ansi_to_spans(input: &str) -> Vec<AnsiSpan> {
 #[must_use]
 pub fn ansi_bytes_to_spans(input: &[u8]) -> Vec<AnsiSpan> {
     let mut parser = AnsiStreamParser::new();
-    let mut spans = parser.push_bytes(input);
-    spans.extend(parser.finish());
+    let mut spans = Vec::new();
+    extend_and_merge(&mut spans, parser.push_bytes(input));
+    extend_and_merge(&mut spans, parser.finish());
     spans
 }
 
@@ -176,10 +177,15 @@ impl SgrPerformer {
             return;
         }
 
-        self.output.push(AnsiSpan::new(
-            std::mem::take(&mut self.text),
-            self.current_style,
-        ));
+        let text = std::mem::take(&mut self.text);
+        if let Some(last) = self.output.last_mut()
+            && last.style == self.current_style
+        {
+            last.text.push_str(&text);
+            return;
+        }
+
+        self.output.push(AnsiSpan::new(text, self.current_style));
     }
 
     fn take_output(&mut self) -> Vec<AnsiSpan> {

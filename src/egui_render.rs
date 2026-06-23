@@ -1,21 +1,23 @@
-use crate::{
-    AnsiColor, AnsiIntensity, AnsiSpan, AnsiStyle, ColoredText, EguiAnsiTheme, UnderlineStyle,
-    ansi_bytes_to_spans, ansi_to_spans,
-};
-use egui::text::LayoutJob;
-use egui::{Color32, RichText, Stroke, TextFormat};
+use crate::{AnsiColor, AnsiIntensity, AnsiSpan, AnsiStyle, EguiAnsiTheme, UnderlineStyle, sgr};
+#[cfg(feature = "legacy")]
+use crate::{ColoredText, ansi_to_spans};
+#[cfg(feature = "legacy")]
+use egui::RichText;
+use egui::text::{LayoutJob, LayoutSection};
+use egui::{Color32, Stroke, TextFormat};
+use vte::{Params, Perform};
 
 /// Converts ANSI spans to an egui layout job.
 #[must_use]
 pub fn spans_to_layout_job(spans: &[AnsiSpan], theme: &EguiAnsiTheme) -> LayoutJob {
     let mut job = LayoutJob::default();
+    job.text
+        .reserve(spans.iter().map(|span| span.text.len()).sum());
+    job.sections.reserve(spans.len());
+    let mut last_style = None;
 
     for span in spans {
-        if span.text.is_empty() {
-            continue;
-        }
-
-        job.append(&span.text, 0.0, text_format_for_style(&span.style, theme));
+        append_styled_text(&mut job, &span.text, span.style, theme, &mut last_style);
     }
 
     job
@@ -24,16 +26,20 @@ pub fn spans_to_layout_job(spans: &[AnsiSpan], theme: &EguiAnsiTheme) -> LayoutJ
 /// Converts a UTF-8 string with ANSI escapes directly to an egui layout job.
 #[must_use]
 pub fn ansi_to_layout_job(input: &str, theme: &EguiAnsiTheme) -> LayoutJob {
-    spans_to_layout_job(&ansi_to_spans(input), theme)
+    ansi_bytes_to_layout_job(input.as_bytes(), theme)
 }
 
 /// Converts bytes with ANSI escapes directly to an egui layout job.
 #[must_use]
 pub fn ansi_bytes_to_layout_job(input: &[u8], theme: &EguiAnsiTheme) -> LayoutJob {
-    spans_to_layout_job(&ansi_bytes_to_spans(input), theme)
+    let mut parser = vte::Parser::new();
+    let mut performer = LayoutJobPerformer::new(theme, input.len());
+    parser.advance(&mut performer, input);
+    performer.finish()
 }
 
 /// Converts ANSI spans to RichText values.
+#[cfg(feature = "legacy")]
 #[must_use]
 pub fn spans_to_rich_text(spans: &[AnsiSpan], theme: &EguiAnsiTheme) -> Vec<RichText> {
     spans
@@ -62,6 +68,7 @@ pub fn spans_to_rich_text(spans: &[AnsiSpan], theme: &EguiAnsiTheme) -> Vec<Rich
 }
 
 /// Converts legacy ColoredText segments to RichText.
+#[cfg(feature = "legacy")]
 #[must_use]
 pub fn convert_to_rich_text(colored_texts: &[ColoredText]) -> Vec<RichText> {
     colored_texts
@@ -83,6 +90,7 @@ pub fn convert_to_rich_text(colored_texts: &[ColoredText]) -> Vec<RichText> {
 }
 
 /// Converts ANSI text to RichText with an explicit theme.
+#[cfg(feature = "legacy")]
 #[must_use]
 pub fn ansi_to_rich_text_with_theme(input: &str, theme: &EguiAnsiTheme) -> Vec<RichText> {
     if input.is_empty() {
@@ -93,11 +101,13 @@ pub fn ansi_to_rich_text_with_theme(input: &str, theme: &EguiAnsiTheme) -> Vec<R
 }
 
 /// Converts ANSI text to RichText using the legacy compatibility theme.
+#[cfg(feature = "legacy")]
 #[must_use]
 pub fn ansi_to_rich_text(input: &str) -> Vec<RichText> {
     ansi_to_rich_text_with_theme(input, &EguiAnsiTheme::legacy())
 }
 
+#[cfg(feature = "legacy")]
 pub(crate) fn spans_to_colored_text(spans: &[AnsiSpan], theme: &EguiAnsiTheme) -> Vec<ColoredText> {
     let mut output: Vec<ColoredText> = Vec::new();
 
@@ -122,6 +132,102 @@ pub(crate) fn spans_to_colored_text(spans: &[AnsiSpan], theme: &EguiAnsiTheme) -
     }
 
     output
+}
+
+struct LayoutJobPerformer<'a> {
+    theme: &'a EguiAnsiTheme,
+    current_style: AnsiStyle,
+    text: String,
+    job: LayoutJob,
+    last_style: Option<AnsiStyle>,
+}
+
+impl<'a> LayoutJobPerformer<'a> {
+    fn new(theme: &'a EguiAnsiTheme, input_len: usize) -> Self {
+        let mut job = LayoutJob::default();
+        job.text.reserve(input_len);
+
+        Self {
+            theme,
+            current_style: AnsiStyle::default(),
+            text: String::new(),
+            job,
+            last_style: None,
+        }
+    }
+
+    fn flush_text(&mut self) {
+        if self.text.is_empty() {
+            return;
+        }
+
+        let text = std::mem::take(&mut self.text);
+        append_styled_text(
+            &mut self.job,
+            &text,
+            self.current_style,
+            self.theme,
+            &mut self.last_style,
+        );
+    }
+
+    fn finish(mut self) -> LayoutJob {
+        self.flush_text();
+        self.job
+    }
+}
+
+impl Perform for LayoutJobPerformer<'_> {
+    fn print(&mut self, c: char) {
+        self.text.push(c);
+    }
+
+    fn execute(&mut self, byte: u8) {
+        match byte {
+            b'\n' => self.text.push('\n'),
+            b'\r' => self.text.push('\r'),
+            b'\t' => self.text.push('\t'),
+            _ => {}
+        }
+    }
+
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if action == 'm' && intermediates.is_empty() && !ignore {
+            self.flush_text();
+            sgr::apply_sgr(params, &mut self.current_style);
+        }
+    }
+}
+
+fn append_styled_text(
+    job: &mut LayoutJob,
+    text: &str,
+    style: AnsiStyle,
+    theme: &EguiAnsiTheme,
+    last_style: &mut Option<AnsiStyle>,
+) {
+    if text.is_empty() {
+        return;
+    }
+
+    let start = job.text.len();
+    job.text.push_str(text);
+    let end = job.text.len();
+
+    if *last_style == Some(style)
+        && let Some(section) = job.sections.last_mut()
+        && section.byte_range.end == start
+    {
+        section.byte_range.end = end;
+        return;
+    }
+
+    job.sections.push(LayoutSection {
+        leading_space: 0.0,
+        byte_range: start..end,
+        format: text_format_for_style(&style, theme),
+    });
+    *last_style = Some(style);
 }
 
 fn text_format_for_style(style: &AnsiStyle, theme: &EguiAnsiTheme) -> TextFormat {
@@ -178,11 +284,13 @@ fn effective_colors(style: &AnsiStyle, theme: &EguiAnsiTheme) -> EffectiveColors
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "legacy")]
 struct LegacyColorOptions {
     foreground: Option<Color32>,
     background: Option<Color32>,
 }
 
+#[cfg(feature = "legacy")]
 fn legacy_color_options(style: &AnsiStyle, theme: &EguiAnsiTheme) -> LegacyColorOptions {
     let colors = effective_colors(style, theme);
 

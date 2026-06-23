@@ -1,8 +1,9 @@
 use eframe::{App, Frame, egui};
 use egui::{Color32, RichText, Sense, Vec2};
+#[cfg(feature = "legacy")]
+use egui_sgr::AnsiParser;
 use egui_sgr::{
-    AnsiColor, AnsiParser, AnsiSpan, AnsiSpanBuffer, EguiAnsiTheme, ansi_to_spans,
-    spans_to_layout_job,
+    AnsiColor, AnsiSpan, AnsiSpanBuffer, EguiAnsiTheme, ansi_to_spans, spans_to_layout_job,
 };
 
 const PRESETS: &[Preset] = &[
@@ -244,8 +245,11 @@ impl AnsiColorDemo {
         ui.add_space(8.0);
         self.show_span_table(ui, spans);
 
-        ui.add_space(8.0);
-        self.show_legacy_segments(ui, parsed_input);
+        #[cfg(feature = "legacy")]
+        {
+            ui.add_space(8.0);
+            self.show_legacy_segments(ui, parsed_input);
+        }
 
         ui.add_space(8.0);
         self.show_palette(ui, theme);
@@ -277,6 +281,7 @@ impl AnsiColorDemo {
             });
     }
 
+    #[cfg(feature = "legacy")]
     fn show_legacy_segments(&self, ui: &mut egui::Ui, parsed_input: &str) {
         let mut parser = AnsiParser::new();
         let segments = parser.parse(parsed_input);
@@ -344,6 +349,7 @@ fn color_label(color: AnsiColor) -> String {
     }
 }
 
+#[cfg(feature = "legacy")]
 fn color32_label(color: Option<Color32>) -> String {
     match color {
         Some(color) => format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b()),
