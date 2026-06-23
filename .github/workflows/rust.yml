@@ -22,21 +22,17 @@ jobs:
     - uses: actions/checkout@v4
     - name: Check formatting
       run: cargo fmt -- --check
-    - name: Check default features
+    - name: Build
       run: cargo check --all-targets --verbose
-    - name: Check all features
-      run: cargo check --all-targets --all-features --verbose
-    - name: Run default tests
+    - name: Run tests
       run: cargo test --all-targets --verbose
-    - name: Run all-feature tests
-      run: cargo test --all-targets --all-features --verbose
     - name: Run doc tests
-      run: cargo test --doc --all-features --verbose
+      run: cargo test --doc --verbose
     - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --all-targets -- -D warnings
     - name: Build benchmarks
       run: cargo bench --bench ansi --no-run
     - name: Build docs
-      run: cargo doc --no-deps --all-features
+      run: cargo doc --no-deps
     - name: Check package
       run: cargo package --allow-dirty

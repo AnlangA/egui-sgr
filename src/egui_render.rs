@@ -1,8 +1,4 @@
 use crate::{AnsiColor, AnsiIntensity, AnsiSpan, AnsiStyle, EguiAnsiTheme, UnderlineStyle, sgr};
-#[cfg(feature = "legacy")]
-use crate::{ColoredText, ansi_to_spans};
-#[cfg(feature = "legacy")]
-use egui::RichText;
 use egui::text::{LayoutJob, LayoutSection};
 use egui::{Color32, Stroke, TextFormat};
 use vte::{Params, Perform};
@@ -36,102 +32,6 @@ pub fn ansi_bytes_to_layout_job(input: &[u8], theme: &EguiAnsiTheme) -> LayoutJo
     let mut performer = LayoutJobPerformer::new(theme, input.len());
     parser.advance(&mut performer, input);
     performer.finish()
-}
-
-/// Converts ANSI spans to RichText values.
-#[cfg(feature = "legacy")]
-#[must_use]
-pub fn spans_to_rich_text(spans: &[AnsiSpan], theme: &EguiAnsiTheme) -> Vec<RichText> {
-    spans
-        .iter()
-        .filter(|span| !span.text.is_empty())
-        .map(|span| {
-            let colors = effective_colors(&span.style, theme);
-            let mut rich_text = RichText::new(&span.text).color(colors.foreground);
-
-            if let Some(background) = colors.background {
-                rich_text = rich_text.background_color(background);
-            }
-            if span.style.italic {
-                rich_text = rich_text.italics();
-            }
-            if span.style.underline != UnderlineStyle::None {
-                rich_text = rich_text.underline();
-            }
-            if span.style.strikethrough {
-                rich_text = rich_text.strikethrough();
-            }
-
-            rich_text
-        })
-        .collect()
-}
-
-/// Converts legacy ColoredText segments to RichText.
-#[cfg(feature = "legacy")]
-#[must_use]
-pub fn convert_to_rich_text(colored_texts: &[ColoredText]) -> Vec<RichText> {
-    colored_texts
-        .iter()
-        .map(|colored_text| {
-            let mut rich_text = RichText::new(&colored_text.text);
-
-            if let Some(fg) = colored_text.foreground_color {
-                rich_text = rich_text.color(fg);
-            }
-
-            if let Some(bg) = colored_text.background_color {
-                rich_text = rich_text.background_color(bg);
-            }
-
-            rich_text
-        })
-        .collect()
-}
-
-/// Converts ANSI text to RichText with an explicit theme.
-#[cfg(feature = "legacy")]
-#[must_use]
-pub fn ansi_to_rich_text_with_theme(input: &str, theme: &EguiAnsiTheme) -> Vec<RichText> {
-    if input.is_empty() {
-        return vec![RichText::new("")];
-    }
-
-    spans_to_rich_text(&ansi_to_spans(input), theme)
-}
-
-/// Converts ANSI text to RichText using the legacy compatibility theme.
-#[cfg(feature = "legacy")]
-#[must_use]
-pub fn ansi_to_rich_text(input: &str) -> Vec<RichText> {
-    ansi_to_rich_text_with_theme(input, &EguiAnsiTheme::legacy())
-}
-
-#[cfg(feature = "legacy")]
-pub(crate) fn spans_to_colored_text(spans: &[AnsiSpan], theme: &EguiAnsiTheme) -> Vec<ColoredText> {
-    let mut output: Vec<ColoredText> = Vec::new();
-
-    for span in spans {
-        if span.text.is_empty() {
-            continue;
-        }
-
-        let colors = legacy_color_options(&span.style, theme);
-        let segment =
-            ColoredText::with_colors(span.text.clone(), colors.foreground, colors.background);
-
-        if let Some(last) = output.last_mut()
-            && last.foreground_color == segment.foreground_color
-            && last.background_color == segment.background_color
-        {
-            last.text.push_str(&segment.text);
-            continue;
-        }
-
-        output.push(segment);
-    }
-
-    output
 }
 
 struct LayoutJobPerformer<'a> {
@@ -278,41 +178,6 @@ fn effective_colors(style: &AnsiStyle, theme: &EguiAnsiTheme) -> EffectiveColors
     }
 
     EffectiveColors {
-        foreground,
-        background,
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-#[cfg(feature = "legacy")]
-struct LegacyColorOptions {
-    foreground: Option<Color32>,
-    background: Option<Color32>,
-}
-
-#[cfg(feature = "legacy")]
-fn legacy_color_options(style: &AnsiStyle, theme: &EguiAnsiTheme) -> LegacyColorOptions {
-    let colors = effective_colors(style, theme);
-
-    let foreground = if style.hidden || style.reverse || style.intensity == AnsiIntensity::Faint {
-        Some(colors.foreground)
-    } else {
-        match style.foreground {
-            AnsiColor::Default => None,
-            _ => Some(colors.foreground),
-        }
-    };
-
-    let background = if style.reverse {
-        colors.background
-    } else {
-        match style.background {
-            AnsiColor::Default => None,
-            _ => colors.background,
-        }
-    };
-
-    LegacyColorOptions {
         foreground,
         background,
     }

@@ -4,9 +4,7 @@
 //! Convert ANSI/SGR text into egui text representations.
 //!
 //! The primary output is [`egui::text::LayoutJob`], because ANSI text is a
-//! single logical string with style changes inside it. Compatibility helpers
-//! for [`egui::RichText`] and the older `ColoredText` model are still
-//! available behind the `legacy` feature.
+//! single logical string with style changes inside it.
 //!
 //! ```rust
 //! use egui_sgr::{ansi_to_layout_job, EguiAnsiTheme};
@@ -22,65 +20,20 @@ mod parser;
 mod sgr;
 mod theme;
 
-/// Legacy color conversion helpers.
-#[cfg(feature = "legacy")]
-pub mod color_models;
-
-#[cfg(feature = "legacy")]
-pub use color_models::*;
 pub use egui_render::{ansi_bytes_to_layout_job, ansi_to_layout_job, spans_to_layout_job};
-#[cfg(feature = "legacy")]
-pub use egui_render::{
-    ansi_to_rich_text, ansi_to_rich_text_with_theme, convert_to_rich_text, spans_to_rich_text,
-};
-#[cfg(feature = "legacy")]
-pub use model::ColoredText;
 pub use model::{AnsiColor, AnsiIntensity, AnsiSpan, AnsiStyle, UnderlineStyle};
 pub use parser::{AnsiSpanBuffer, AnsiStreamParser, ansi_bytes_to_spans, ansi_to_spans};
 pub use theme::EguiAnsiTheme;
-
-/// Compatibility parser that returns the legacy foreground/background model.
-///
-/// This parser intentionally keeps the historical one-shot behavior: every call
-/// to [`AnsiParser::parse`] starts from the default style. Use
-/// [`AnsiStreamParser`] when ANSI state must survive across chunks.
-#[derive(Debug, Default, Clone)]
-#[cfg(feature = "legacy")]
-pub struct AnsiParser;
-
-#[cfg(feature = "legacy")]
-impl AnsiParser {
-    /// Creates a new one-shot compatibility parser.
-    #[must_use]
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Parses ANSI/SGR text into the legacy [`ColoredText`] representation.
-    #[must_use]
-    pub fn parse(&mut self, input: &str) -> Vec<ColoredText> {
-        if input.is_empty() {
-            return vec![ColoredText::new("")];
-        }
-
-        let spans = ansi_to_spans(input);
-        egui_render::spans_to_colored_text(&spans, &EguiAnsiTheme::legacy())
-    }
-}
 
 /// Small compile-checked usage sample used by examples and documentation.
 pub fn example_usage() {
     let theme = EguiAnsiTheme::default();
     let _job = ansi_to_layout_job("\x1b[38;5;208morange\x1b[0m", &theme);
-    #[cfg(feature = "legacy")]
-    let _rich_text = ansi_to_rich_text("\x1b[31mred\x1b[0m");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "legacy")]
-    use egui::Color32;
     use egui::Stroke;
 
     fn text_of(spans: &[AnsiSpan]) -> String {
@@ -268,154 +221,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy")]
-    fn ansi_parser_compatibility_is_one_shot() {
-        let mut parser = AnsiParser::new();
-
-        let red = parser.parse("\x1b[31mRed");
-        let plain = parser.parse("Plain");
-
-        assert_eq!(red[0].text, "Red");
-        assert_eq!(red[0].foreground_color, Some(Color32::RED));
-        assert_eq!(plain[0].text, "Plain");
-        assert_eq!(plain[0].foreground_color, None);
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn ansi_parser_compatibility_keeps_empty_input_segment() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("");
-
-        assert_eq!(segments, vec![ColoredText::new("")]);
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn rich_text_compatibility_keeps_empty_input_segment() {
-        let rich_text = ansi_to_rich_text("");
-
-        assert_eq!(rich_text.len(), 1);
-        assert_eq!(rich_text[0].text(), "");
-    }
-
-    #[test]
     fn non_sgr_sequences_are_stripped() {
         let spans = ansi_to_spans("Before\x1b]0;Title\x07\x1b[2JAfter");
 
         assert_eq!(text_of(&spans), "BeforeAfter");
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn escaped_backslash_sequences_are_plain_text() {
-        let mut parser = AnsiParser::new();
-        let input = "\\x1b[31mRed\\x1b[0m";
-        let segments = parser.parse(input);
-
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].text, input);
-        assert_eq!(segments[0].foreground_color, None);
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn colored_text_constructors_work() {
-        let plain = ColoredText::new("Hello");
-        let fg = ColoredText::with_foreground("Hello", Color32::RED);
-        let bg = ColoredText::with_background("Hello", Color32::BLUE);
-        let both = ColoredText::with_colors("Hello", Some(Color32::RED), Some(Color32::BLUE));
-
-        assert_eq!(plain.foreground_color, None);
-        assert_eq!(fg.foreground_color, Some(Color32::RED));
-        assert_eq!(bg.background_color, Some(Color32::BLUE));
-        assert_eq!(both.foreground_color, Some(Color32::RED));
-        assert_eq!(both.background_color, Some(Color32::BLUE));
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn mixed_colors_keep_expected_text_segments() {
-        let result =
-            ansi_to_rich_text("Normal \x1b[31mred\x1b[0m normal \x1b[38;5;208morange\x1b[0m done");
-
-        assert_eq!(result.len(), 5);
-        assert_eq!(result[0].text(), "Normal ");
-        assert_eq!(result[1].text(), "red");
-        assert_eq!(result[2].text(), " normal ");
-        assert_eq!(result[3].text(), "orange");
-        assert_eq!(result[4].text(), " done");
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn background_color_is_preserved_in_legacy_parser() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[41mWhite on red\x1b[0m");
-
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].text, "White on red");
-        assert_eq!(segments[0].background_color, Some(Color32::RED));
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn foreground_and_background_color_are_preserved() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[31;43mRed on yellow\x1b[0m");
-
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].foreground_color, Some(Color32::RED));
-        assert_eq!(segments[0].background_color, Some(Color32::YELLOW));
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn sequential_color_changes_split_segments() {
-        let mut parser = AnsiParser::new();
-        let segments = parser
-            .parse("Default\x1b[31mRed\x1b[43mRed on yellow\x1b[32mGreen on yellow\x1b[0mDefault");
-
-        let texts: Vec<_> = segments
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect();
-        assert_eq!(
-            texts,
-            vec![
-                "Default",
-                "Red",
-                "Red on yellow",
-                "Green on yellow",
-                "Default"
-            ]
-        );
-        assert_eq!(segments[0].foreground_color, None);
-        assert_eq!(segments[1].foreground_color, Some(Color32::RED));
-        assert_eq!(segments[2].background_color, Some(Color32::YELLOW));
-        assert_eq!(segments[4].foreground_color, None);
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn reset_foreground_color() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[31mRed\x1b[39mDefault");
-
-        assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].foreground_color, Some(Color32::RED));
-        assert_eq!(segments[1].foreground_color, None);
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn reset_background_color() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[41mRed BG\x1b[49mDefault BG");
-
-        assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].background_color, Some(Color32::RED));
-        assert_eq!(segments[1].background_color, None);
     }
 
     #[test]
@@ -448,30 +257,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy")]
-    fn truecolor_foreground_value() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[38;2;255;0;0mRed\x1b[0m");
-
-        assert_eq!(
-            segments[0].foreground_color,
-            Some(Color32::from_rgb(255, 0, 0))
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn truecolor_background_value() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[48;2;0;255;0mGreen BG\x1b[0m");
-
-        assert_eq!(
-            segments[0].background_color,
-            Some(Color32::from_rgb(0, 255, 0))
-        );
-    }
-
-    #[test]
     fn indexed_color_boundary_values() {
         let spans = ansi_to_spans(
             "\x1b[38;5;0mA\x1b[38;5;15mB\x1b[38;5;16mC\x1b[38;5;231mD\x1b[38;5;232mE\x1b[38;5;255mF",
@@ -480,57 +265,6 @@ mod tests {
         assert_eq!(spans.len(), 6);
         assert_eq!(spans[0].style.foreground, AnsiColor::Indexed(0));
         assert_eq!(spans[5].style.foreground, AnsiColor::Indexed(255));
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn consecutive_resets_are_harmless() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[0m\x1b[0m\x1b[0mText\x1b[0m");
-
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0], ColoredText::new("Text"));
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn default_parser_works() {
-        let mut parser: AnsiParser = Default::default();
-        let segments = parser.parse("\x1b[31mRed\x1b[0m");
-
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].text, "Red");
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn multiline_text_keeps_newline() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[31mLine1\nLine2\x1b[0m");
-
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].text, "Line1\nLine2");
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn unicode_text_is_preserved() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[31m你好世界\x1b[0m");
-
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].text, "你好世界");
-    }
-
-    #[test]
-    #[cfg(feature = "legacy")]
-    fn empty_reset_sequence_resets_style() {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse("\x1b[31mRed\x1b[mDefault");
-
-        assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].foreground_color, Some(Color32::RED));
-        assert_eq!(segments[1].foreground_color, None);
     }
 
     #[test]
@@ -647,14 +381,6 @@ mod tests {
         let job = ansi_to_layout_job("\x1b[1;31mBold red", &theme);
 
         assert_eq!(job.sections[0].format.color, theme.palette[9]);
-    }
-
-    #[test]
-    fn legacy_theme_does_not_brighten_bold_low_colors() {
-        let theme = EguiAnsiTheme::legacy();
-        let job = ansi_to_layout_job("\x1b[1;31mBold red", &theme);
-
-        assert_eq!(job.sections[0].format.color, theme.palette[1]);
     }
 
     #[test]

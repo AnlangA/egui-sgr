@@ -24,27 +24,22 @@ sequences, and maps the result into egui types.
   incomplete escape sequences, and incomplete UTF-8 between chunks.
 - `AnsiSpanBuffer` accumulates streaming output and can render the accumulated
   spans to a `LayoutJob`.
-- `AnsiParser`, `ColoredText`, and `ansi_to_rich_text` are compatibility APIs
-  behind the `legacy` feature for existing users and simple segmented
-  rendering.
 
 ## Module Responsibilities
 
 - `model`: public ANSI model types such as `AnsiSpan`, `AnsiStyle`, and
   `AnsiColor`.
-- `theme`: egui color/theme mapping, including xterm and legacy palettes.
+- `theme`: egui color/theme mapping, including the xterm palette.
 - `sgr`: SGR parameter interpretation and style-state transitions.
 - `parser`: `vte::Parser` integration and streaming state.
-- `egui_render`: conversion from ANSI spans into `LayoutJob`, `RichText`, and
-  legacy `ColoredText`.
-- `color_models`: legacy helper functions retained for compatibility.
+- `egui_render`: conversion from ANSI spans and ANSI byte streams into
+  `LayoutJob`.
 
 ## Rendering Policy
 
-`LayoutJob` is the primary output because ANSI text is usually one logical
-string with multiple styles inside it. Splitting that into many `RichText`
-labels changes wrapping and layout behavior. `RichText` remains available for
-compatibility and simpler use cases.
+`LayoutJob` is the only egui rendering output because ANSI text is usually one
+logical string with multiple styles inside it. Keeping it as one widget
+preserves wrapping and layout behavior.
 
 Some ANSI semantics are richer than egui's current text format. Curly, dotted,
 and dashed underline styles are preserved in `AnsiSpan`, but all underline
@@ -76,17 +71,15 @@ The benchmark suite covers one-shot parsing, direct `LayoutJob` rendering,
 parse-then-render comparison, SGR-dense inputs, truecolor-heavy inputs, long
 plain text, chunked streaming parse, and chunked streaming buffer rendering.
 
-## Compatibility Policy
+## API Policy
 
-The 0.3 API intentionally narrows the default public surface:
+The 0.3 API intentionally removes the old compatibility surface:
 
-- The default API focuses on `AnsiSpan`, `AnsiStreamParser`, `AnsiSpanBuffer`,
-  and `LayoutJob` rendering.
-- `AnsiParser::parse(&str) -> Vec<ColoredText>` remains one-shot and resets
-  style state for every call when the `legacy` feature is enabled.
-- `ansi_to_rich_text` remains available with the `legacy` feature and uses the
-  legacy palette.
-- New code should prefer `LayoutJob` APIs for egui rendering.
+- Public rendering is centered on `LayoutJob`.
+- Semantic parsing is exposed through `AnsiSpan`, `AnsiStyle`, `ansi_to_spans`,
+  `ansi_bytes_to_spans`, `AnsiStreamParser`, and `AnsiSpanBuffer`.
+- Removed APIs include `AnsiParser`, `ColoredText`, RichText conversion helpers,
+  and the old color model helper modules.
 
 ## Quality Gates
 
@@ -95,12 +88,10 @@ Before publishing, run:
 ```sh
 cargo fmt -- --check
 cargo check --all-targets
-cargo check --all-targets --all-features
 cargo test --all-targets
-cargo test --all-targets --all-features
-cargo test --doc --all-features
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --doc
+cargo clippy --all-targets -- -D warnings
 cargo bench --bench ansi --no-run
-cargo doc --no-deps --all-features
+cargo doc --no-deps
 cargo package --allow-dirty
 ```

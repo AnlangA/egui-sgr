@@ -11,14 +11,6 @@ value with multiple styled sections.
 egui_sgr = "0.3"
 ```
 
-For the legacy `RichText`, `ColoredText`, `AnsiParser`, and color helper APIs,
-enable the optional compatibility feature:
-
-```toml
-[dependencies]
-egui_sgr = { version = "0.3", features = ["legacy"] }
-```
-
 ## LayoutJob Usage
 
 ```rust
@@ -33,9 +25,8 @@ let job = ansi_to_layout_job(
 ui.label(job);
 ```
 
-`LayoutJob` is preferred over `RichText` because ANSI commonly changes style
-inside a single logical string. `RichText` applies style to a whole string, so
-it remains available only for compatibility and simple segmented rendering.
+`LayoutJob` is used because ANSI commonly changes style inside a single logical
+string, and a single egui widget preserves wrapping and layout behavior.
 
 ## Streaming Usage
 
@@ -73,10 +64,8 @@ whatever chunks the caller receives.
 - `ansi_to_layout_job` / `ansi_bytes_to_layout_job`: one-call parse and render.
 - `AnsiStreamParser`: incremental parser that preserves state across chunks.
 - `AnsiSpanBuffer`: accumulates streamed spans and renders the full buffer.
-- `ansi_to_rich_text`, `convert_to_rich_text`, `AnsiParser`: compatibility APIs
-  behind the `legacy` feature.
 
-For the full module design and compatibility policy, see
+For the full module design and API policy, see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Supported SGR
@@ -95,9 +84,7 @@ DCS, and OSC sequences are stripped by default.
 ## Themes
 
 `EguiAnsiTheme::default()` uses a conventional xterm 256-color palette.
-`EguiAnsiTheme::legacy()` preserves the previous 0.1.x palette as closely as
-possible. The old `RichText` and `ColoredText` APIs are available with the
-`legacy` feature.
+`EguiAnsiTheme::xterm()` is an explicit alias for the same default theme.
 
 ## Demo
 
@@ -129,12 +116,10 @@ The release quality gate used by CI is:
 ```sh
 cargo fmt -- --check
 cargo check --all-targets
-cargo check --all-targets --all-features
 cargo test --all-targets
-cargo test --all-targets --all-features
-cargo test --doc --all-features
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --doc
+cargo clippy --all-targets -- -D warnings
 cargo bench --bench ansi --no-run
-cargo doc --no-deps --all-features
+cargo doc --no-deps
 cargo package --allow-dirty
 ```

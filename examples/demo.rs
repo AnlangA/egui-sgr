@@ -1,7 +1,5 @@
 use eframe::{App, Frame, egui};
 use egui::{Color32, RichText, Sense, Vec2};
-#[cfg(feature = "legacy")]
-use egui_sgr::AnsiParser;
 use egui_sgr::{
     AnsiColor, AnsiSpan, AnsiSpanBuffer, EguiAnsiTheme, ansi_to_spans, spans_to_layout_job,
 };
@@ -48,16 +46,9 @@ struct Preset {
     input: &'static str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DemoTheme {
-    Xterm,
-    Legacy,
-}
-
 struct AnsiColorDemo {
     selected_preset: usize,
     custom_input: String,
-    theme: DemoTheme,
     stream_buffer: AnsiSpanBuffer,
     stream_cursor: usize,
 }
@@ -67,7 +58,6 @@ impl Default for AnsiColorDemo {
         Self {
             selected_preset: 3,
             custom_input: display_ansi_sequence(PRESETS[3].input),
-            theme: DemoTheme::Xterm,
             stream_buffer: AnsiSpanBuffer::new(),
             stream_cursor: 0,
         }
@@ -88,7 +78,7 @@ impl App for AnsiColorDemo {
         });
         ui.separator();
 
-        let theme = self.egui_theme();
+        let theme = EguiAnsiTheme::default();
         let parsed_input = parse_user_input(&self.custom_input);
         let spans = ansi_to_spans(&parsed_input);
         let job = spans_to_layout_job(&spans, &theme);
@@ -104,13 +94,6 @@ impl App for AnsiColorDemo {
 }
 
 impl AnsiColorDemo {
-    fn egui_theme(&self) -> EguiAnsiTheme {
-        match self.theme {
-            DemoTheme::Xterm => EguiAnsiTheme::default(),
-            DemoTheme::Legacy => EguiAnsiTheme::legacy(),
-        }
-    }
-
     fn show_controls(&mut self, ui: &mut egui::Ui, parsed_input: &str, spans: &[AnsiSpan]) {
         ui.heading("Input");
         ui.horizontal_wrapped(|ui| {
@@ -123,13 +106,6 @@ impl AnsiColorDemo {
                     self.custom_input = display_ansi_sequence(preset.input);
                 }
             }
-        });
-
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label("Theme");
-            ui.selectable_value(&mut self.theme, DemoTheme::Xterm, "xterm");
-            ui.selectable_value(&mut self.theme, DemoTheme::Legacy, "legacy");
         });
 
         ui.add_space(8.0);
@@ -223,7 +199,8 @@ impl AnsiColorDemo {
             }
         });
 
-        ui.label(self.stream_buffer.to_layout_job(&self.egui_theme()));
+        let theme = EguiAnsiTheme::default();
+        ui.label(self.stream_buffer.to_layout_job(&theme));
     }
 
     fn show_preview(
@@ -244,12 +221,6 @@ impl AnsiColorDemo {
 
         ui.add_space(8.0);
         self.show_span_table(ui, spans);
-
-        #[cfg(feature = "legacy")]
-        {
-            ui.add_space(8.0);
-            self.show_legacy_segments(ui, parsed_input);
-        }
 
         ui.add_space(8.0);
         self.show_palette(ui, theme);
@@ -279,32 +250,6 @@ impl AnsiColorDemo {
                     ui.end_row();
                 }
             });
-    }
-
-    #[cfg(feature = "legacy")]
-    fn show_legacy_segments(&self, ui: &mut egui::Ui, parsed_input: &str) {
-        let mut parser = AnsiParser::new();
-        let segments = parser.parse(parsed_input);
-
-        ui.collapsing("Legacy ColoredText", |ui| {
-            egui::Grid::new("legacy_segments_grid")
-                .num_columns(3)
-                .striped(true)
-                .spacing([12.0, 4.0])
-                .show(ui, |ui| {
-                    ui.strong("Text");
-                    ui.strong("Foreground");
-                    ui.strong("Background");
-                    ui.end_row();
-
-                    for segment in segments {
-                        ui.monospace(visible_debug_text(&segment.text));
-                        ui.monospace(color32_label(segment.foreground_color));
-                        ui.monospace(color32_label(segment.background_color));
-                        ui.end_row();
-                    }
-                });
-        });
     }
 
     fn show_palette(&self, ui: &mut egui::Ui, theme: &EguiAnsiTheme) {
@@ -346,14 +291,6 @@ fn color_label(color: AnsiColor) -> String {
         AnsiColor::Default => "default".to_owned(),
         AnsiColor::Indexed(index) => format!("idx {index}"),
         AnsiColor::Rgb(r, g, b) => format!("rgb({r},{g},{b})"),
-    }
-}
-
-#[cfg(feature = "legacy")]
-fn color32_label(color: Option<Color32>) -> String {
-    match color {
-        Some(color) => format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b()),
-        None => "default".to_owned(),
     }
 }
 

@@ -50,29 +50,6 @@ impl EguiAnsiTheme {
         Self::default()
     }
 
-    /// Returns a theme matching the 0.1.x compatibility palette as closely as
-    /// the span model allows.
-    #[must_use]
-    pub fn legacy() -> Self {
-        let default_foreground = Color32::WHITE;
-        let default_format = TextFormat {
-            color: default_foreground,
-            background: Color32::TRANSPARENT,
-            ..Default::default()
-        };
-
-        Self {
-            default_format,
-            default_foreground,
-            default_background: Color32::BLACK,
-            palette: Self::legacy_palette(),
-            underline_width: 1.0,
-            strikethrough_width: 1.0,
-            faint_opacity: 0.6,
-            bold_is_bright: false,
-        }
-    }
-
     /// Builds the xterm 256-color palette.
     #[must_use]
     pub fn xterm_palette() -> [Color32; 256] {
@@ -93,29 +70,6 @@ impl EguiAnsiTheme {
             Color32::from_rgb(255, 0, 255),
             Color32::from_rgb(0, 255, 255),
             Color32::from_rgb(255, 255, 255),
-        ])
-    }
-
-    /// Builds the palette used by the 0.1.x API compatibility path.
-    #[must_use]
-    pub fn legacy_palette() -> [Color32; 256] {
-        build_palette([
-            Color32::BLACK,
-            Color32::RED,
-            Color32::GREEN,
-            Color32::YELLOW,
-            Color32::BLUE,
-            Color32::from_rgb(255, 0, 255),
-            Color32::from_rgb(0, 255, 255),
-            Color32::from_rgb(255, 255, 255),
-            Color32::from_rgb(128, 128, 128),
-            Color32::from_rgb(255, 128, 128),
-            Color32::from_rgb(128, 255, 128),
-            Color32::from_rgb(255, 255, 128),
-            Color32::from_rgb(128, 128, 255),
-            Color32::from_rgb(255, 128, 255),
-            Color32::from_rgb(128, 255, 255),
-            Color32::WHITE,
         ])
     }
 }

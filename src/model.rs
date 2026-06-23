@@ -1,6 +1,3 @@
-#[cfg(feature = "legacy")]
-use egui::Color32;
-
 /// ANSI color representation before it is mapped into an egui color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AnsiColor {
@@ -88,65 +85,6 @@ impl AnsiSpan {
         Self {
             text: text.into(),
             style,
-        }
-    }
-}
-
-/// Legacy text segment with only foreground/background egui colors.
-#[cfg(feature = "legacy")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColoredText {
-    /// The text content of this segment.
-    pub text: String,
-    /// Optional foreground color.
-    pub foreground_color: Option<Color32>,
-    /// Optional background color.
-    pub background_color: Option<Color32>,
-}
-
-#[cfg(feature = "legacy")]
-impl ColoredText {
-    /// Creates a segment with no colors applied.
-    #[must_use]
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            foreground_color: None,
-            background_color: None,
-        }
-    }
-
-    /// Creates a segment with a foreground color.
-    #[must_use]
-    pub fn with_foreground(text: impl Into<String>, color: Color32) -> Self {
-        Self {
-            text: text.into(),
-            foreground_color: Some(color),
-            background_color: None,
-        }
-    }
-
-    /// Creates a segment with a background color.
-    #[must_use]
-    pub fn with_background(text: impl Into<String>, color: Color32) -> Self {
-        Self {
-            text: text.into(),
-            foreground_color: None,
-            background_color: Some(color),
-        }
-    }
-
-    /// Creates a segment with optional foreground and background colors.
-    #[must_use]
-    pub fn with_colors(
-        text: impl Into<String>,
-        foreground: Option<Color32>,
-        background: Option<Color32>,
-    ) -> Self {
-        Self {
-            text: text.into(),
-            foreground_color: foreground,
-            background_color: background,
         }
     }
 }
